@@ -1,0 +1,46 @@
+"""Structured error types for unren.
+
+Re-exported at unren.core for convenience; canonical definitions live here.
+See unren.core.__init__ for the module docstring duplicate guard.
+"""
+
+from __future__ import annotations
+
+
+class UnrenError(Exception):
+    code = "unren-error"
+
+    def __init__(self, message: str, *, details: dict | None = None) -> None:
+        super().__init__(message)
+        self.message = message
+        self.details = details or {}
+
+    def to_dict(self) -> dict:
+        d: dict = {"code": self.code, "message": self.message}
+        if self.details:
+            d["details"] = self.details
+        return d
+
+
+class PathNotFoundError(UnrenError):
+    code = "path-not-found"
+
+
+class NotAGameDirectoryError(UnrenError):
+    code = "not-a-game-directory"
+
+
+class DetectionError(UnrenError):
+    code = "detection-error"
+
+
+class ConfigError(UnrenError):
+    code = "config-error"
+
+
+class UnsupportedOperationError(UnrenError):
+    code = "unsupported-operation"
+
+
+class RuntimeResolutionError(UnrenError):
+    code = "runtime-resolution-error"

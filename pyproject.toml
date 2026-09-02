@@ -1,0 +1,48 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "unren"
+version = "0.1.0"
+description = "Native Linux port of UnRen-forall (Ren'Py game detection/utility toolkit)"
+readme = "README.md"
+license = { text = "GPL-3.0-or-later" }
+requires-python = ">=3.10"
+authors = [
+    { name = "UnRen-forall-linux contributors" },
+]
+keywords = ["renpy", "unren", "game-modding", "rpa", "rpyc"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Topic :: Games/Entertainment",
+    "Topic :: Utilities",
+]
+dependencies = [
+    "tomli>=2.0; python_version < '3.11'",
+]
+
+[project.optional-dependencies]
+ui = ["rich>=13.0"]
+paths = ["platformdirs>=3.0"]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/Lurmel/UnRen-forall"
+Upstream = "https://github.com/Lurmel/UnRen-forall"
+
+[project.scripts]
+unren = "unren.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/unren"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
