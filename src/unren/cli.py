@@ -4,13 +4,16 @@ Surface per Bauplan §7:
 
     unren [GLOBAL OPTIONS] COMMAND [OPTIONS]
 
-Milestone 1 implements `detect` and `doctor` fully. Other subcommands
-(`extract`, `decompile`, `console`, `devmode`, `all`) are registered but only
-print a "not yet implemented" message and exit non-zero - their real logic
-is later milestones (M2+). Running with no subcommand at all (bare
-`unren /path/to/game`, meant to launch the interactive UI per Bauplan §7)
-is also stubbed the same way for this milestone since ui/interactive.py
-doesn't exist yet.
+Milestone 4 completes the primary action surface: `detect`, `doctor`,
+`extract`, `decompile` (M1-M3), plus `console enable`, `devmode enable`,
+`skip enable`, `skipall enable`, `rollback enable`, `quicksave enable`,
+`quickmenu enable`, `nosync enable` (additive `.rpy` game-config patches -
+`unren.actions.enable_console`/`enable_devmode`/`game_patches`), `cleanup
+restore`/`cleanup delete` (`unren.actions.cleanup`), and `all` (runs every
+non-destructive action in a safe order - `unren.actions.run_all`). Running
+with no subcommand at all (bare `unren /path/to/game`, meant to launch the
+interactive UI per Bauplan §7) is still stubbed since ui/interactive.py
+doesn't exist yet (Milestone 5).
 """
 
 from __future__ import annotations
@@ -19,9 +22,11 @@ import argparse
 import platform
 import sys
 from pathlib import Path
+from typing import Any
 
 from unren import __version__
-from unren.actions import decompile_rpyc, extract_rpa
+from unren.actions import cleanup as cleanup_action
+from unren.actions import decompile_rpyc, enable_console, enable_devmode, extract_rpa, game_patches, run_all
 from unren.core.config import UnrenConfig, find_config
 from unren.core.errors import UnrenError
 from unren.core.result import Result
@@ -29,8 +34,6 @@ from unren.detection import game as game_detect
 from unren.detection.archives import ArchiveInfo
 from unren.detection.rpyc import find_rpyc_files
 from unren.ui import output as ui_output
-
-NOT_YET_IMPLEMENTED = ("console", "devmode", "all")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -128,11 +131,59 @@ def build_parser() -> argparse.ArgumentParser:
         help="Pass --try-harder to unrpyc (workarounds for common obfuscation; slower).",
     )
 
-    for name in NOT_YET_IMPLEMENTED:
-        stub_p = subparsers.add_parser(
-            name, help=f"({name}) - not yet implemented in this milestone.", parents=[sub_global_opts]
-        )
-        stub_p.add_argument("path", nargs="?", default=".")
+    # --- game-config patch subcommands (console/devmode/skip/rollback/etc.) ---
+    # Each is a `unren <name> enable [PATH]` invocation, matching the Bauplan
+    # §7 CLI examples (`unren console enable /path/to/game`). All share the
+    # same idempotent additive-.rpy-file mechanism (unren.core.game_patch);
+    # "enable" is the only verb for this milestone (no "disable" - upstream
+    # itself has no undo for these beyond `cleanup restore`, which reverts
+    # via the generic backup mechanism, not a per-toggle disable).
+    patch_subcommands = (
+        ("console", "Enable Ren'Py's built-in developer console + config.developer."),
+        ("devmode", "Enable Ren'Py's config.debug developer flag."),
+        ("skip", "Enable force-skip of seen dialogue (hold-Ctrl skip)."),
+        ("skipall", "Enable force-skip including unseen dialogue and transitions."),
+        ("rollback", "Force-enable rollback (undo/scroll-back), even if the game disabled it."),
+        ("quicksave", "Bind F5/F9 to QuickSave/QuickLoad regardless of the game's own keymap."),
+        ("quickmenu", "Force the quick-menu overlay to always be visible."),
+        ("nosync", "Disable Ren'Py's cross-device save-sync (config.has_sync)."),
+    )
+    for name, help_text in patch_subcommands:
+        patch_p = subparsers.add_parser(name, help=help_text, parents=[sub_global_opts])
+        patch_sub = patch_p.add_subparsers(dest=f"{name}_action")
+        enable_p = patch_sub.add_parser("enable", help=f"Write the {name} marker file.", parents=[sub_global_opts])
+        enable_p.add_argument("path", nargs="?", default=".", help="Path to the game directory.")
+
+    # --- cleanup: restore/delete .unren/backups/ --------------------------
+    cleanup_p = subparsers.add_parser(
+        "cleanup", help="Restore or permanently delete files backed up by other actions.", parents=[sub_global_opts]
+    )
+    cleanup_sub = cleanup_p.add_subparsers(dest="cleanup_action")
+
+    restore_p = cleanup_sub.add_parser(
+        "restore", help="Restore every backed-up file to its original location.", parents=[sub_global_opts]
+    )
+    restore_p.add_argument("path", nargs="?", default=".", help="Path to the game directory.")
+
+    delete_p = cleanup_sub.add_parser(
+        "delete", help="Permanently delete all backups (irreversible).", parents=[sub_global_opts]
+    )
+    delete_p.add_argument("path", nargs="?", default=".", help="Path to the game directory.")
+    delete_p.add_argument(
+        "--yes", action="store_true", default=False, help="Confirm the irreversible deletion (required unless --dry-run)."
+    )
+
+    # --- all: run every non-destructive action in a safe order -------------
+    all_p = subparsers.add_parser(
+        "all", help="Run every relevant non-destructive action sequentially.", parents=[sub_global_opts]
+    )
+    all_p.add_argument("path", nargs="?", default=".", help="Path to the game directory.")
+    all_p.add_argument(
+        "--force",
+        action="store_true",
+        default=False,
+        help="Overwrite existing destination files where applicable (backs them up first).",
+    )
 
     return parser
 
@@ -417,19 +468,182 @@ def cmd_decompile(args: argparse.Namespace) -> int:
     return 1 if report.total_failed == report.total_files else 0
 
 
-def cmd_stub(args: argparse.Namespace, name: str) -> int:
-    message = (
-        f"'{name}' is not yet implemented in this milestone (Linux Core Skeleton). "
-        "Detection-only (detect/doctor) is available; mutating actions land in later milestones."
-    )
-    if args.json:
-        from unren.core.errors import UnsupportedOperationError
+PATCH_ACTIONS: dict[str, tuple[str, Any]] = {
+    "console": ("Console + developer mode", None),  # handled specially (enable_console module)
+    "devmode": ("Developer/debug mode", None),  # handled specially (enable_devmode module)
+    "skip": ("Force-skip (seen-only)", game_patches.enable_skip),
+    "skipall": ("Force-skip (incl. unseen + transitions)", game_patches.enable_skip_all),
+    "rollback": ("Rollback", game_patches.enable_rollback),
+    "quicksave": ("Quicksave/quickload keybinds", game_patches.enable_quicksave),
+    "quickmenu": ("Quick-menu force-on", game_patches.enable_quickmenu),
+    "nosync": ("Disable save-sync", game_patches.disable_save_sync),
+}
 
-        result: Result = Result.failure(UnsupportedOperationError(message, details={"command": name}))
-        _emit(args, text="", json_data=result.to_dict())
+
+def _format_patch_text(label: str, patch) -> str:
+    if patch.dry_run:
+        status = "already present, no-op" if patch.already_present else f"would write {patch.target}"
     else:
-        ui_output.print_error(message, no_color=args.no_color)
-    return 3
+        status = "already present, no-op" if patch.already_present else f"wrote {patch.target}"
+    return f"{label}: {status}"
+
+
+def cmd_patch_action(args: argparse.Namespace, name: str) -> int:
+    action = getattr(args, f"{name}_action", None)
+    if action != "enable":
+        ui_output.print_error(
+            f"'{name}' requires a sub-action: `unren {name} enable [PATH]`.", no_color=args.no_color
+        )
+        return 2
+
+    try:
+        ctx = game_detect.detect_game(args.path)
+    except UnrenError as exc:
+        result: Result = Result.failure(exc)
+        if args.json:
+            _emit(args, text="", json_data=result.to_dict())
+        else:
+            ui_output.print_error(exc.message, no_color=args.no_color)
+        return 1
+
+    if ctx.game_dir is None:
+        from unren.core.errors import MissingGameDirectoryError
+
+        exc = MissingGameDirectoryError(
+            f"No game/ directory found under: {ctx.root}", details={"root": str(ctx.root)}
+        )
+        result = Result.failure(exc)
+        if args.json:
+            _emit(args, text="", json_data=result.to_dict())
+        else:
+            ui_output.print_error(exc.message, no_color=args.no_color)
+        return 1
+
+    label, fn = PATCH_ACTIONS[name]
+    try:
+        if name == "console":
+            report = enable_console.enable(game_dir=ctx.game_dir, dry_run=args.dry_run)
+            patch = report.patch
+        elif name == "devmode":
+            report = enable_devmode.enable(game_dir=ctx.game_dir, dry_run=args.dry_run)
+            patch = report.patch
+        else:
+            patch = fn(game_dir=ctx.game_dir, dry_run=args.dry_run)
+    except UnrenError as exc:
+        result = Result.failure(exc)
+        if args.json:
+            _emit(args, text="", json_data=result.to_dict())
+        else:
+            ui_output.print_error(exc.message, no_color=args.no_color)
+        return 1
+
+    result = Result.success(patch)
+    if args.json:
+        _emit(args, text="", json_data=result.to_dict())
+    elif not args.quiet:
+        print(_format_patch_text(label, patch))
+    return 0
+
+
+def _format_cleanup_text(report) -> str:
+    lines = [
+        f"Game root:  {report.game_root}",
+        f"Operation:  {report.operation}",
+        f"Mode:       {'dry-run (no files touched)' if report.dry_run else 'executed'}",
+        f"Files:      {report.total_files}",
+    ]
+    if not report.files:
+        lines.append("Nothing to do (no backups found).")
+        return "\n".join(lines)
+    for f in report.files:
+        verb = "restored" if report.operation == "restore" else "deleted"
+        if report.dry_run:
+            verb = f"would be {verb}"
+        status = verb if f.ok else f"FAILED: {f.error}"
+        lines.append(f"  {f.backup_path}  [{status}]")
+    lines.append(f"\nTotal: {report.total_succeeded} succeeded, {report.total_failed} failed.")
+    return "\n".join(lines)
+
+
+def cmd_cleanup(args: argparse.Namespace) -> int:
+    action = getattr(args, "cleanup_action", None)
+    if action not in ("restore", "delete"):
+        ui_output.print_error(
+            "'cleanup' requires a sub-action: `unren cleanup restore [PATH]` or "
+            "`unren cleanup delete [PATH] --yes`.",
+            no_color=args.no_color,
+        )
+        return 2
+
+    try:
+        ctx = game_detect.detect_game(args.path)
+    except UnrenError as exc:
+        result: Result = Result.failure(exc)
+        if args.json:
+            _emit(args, text="", json_data=result.to_dict())
+        else:
+            ui_output.print_error(exc.message, no_color=args.no_color)
+        return 1
+
+    try:
+        if action == "restore":
+            report = cleanup_action.restore_backups(game_root=ctx.root, dry_run=args.dry_run)
+        else:
+            report = cleanup_action.delete_backups(
+                game_root=ctx.root, dry_run=args.dry_run, confirm=getattr(args, "yes", False)
+            )
+    except UnrenError as exc:
+        result = Result.failure(exc)
+        if args.json:
+            _emit(args, text="", json_data=result.to_dict())
+        else:
+            ui_output.print_error(exc.message, no_color=args.no_color)
+        return 1
+
+    result = Result.success(report)
+    if args.json:
+        _emit(args, text="", json_data=result.to_dict())
+    elif not args.quiet:
+        print(_format_cleanup_text(report))
+
+    if report.total_files == 0:
+        return 0
+    return 1 if report.total_failed == report.total_files else 0
+
+
+def _format_all_text(report) -> str:
+    lines = [f"Game root:  {report.game_root}", f"Mode:       {'dry-run' if report.dry_run else 'executed'}", ""]
+    for stage in report.stages:
+        if stage.skipped:
+            lines.append(f"  {stage.stage:<20} SKIPPED  ({stage.reason})")
+        elif stage.ok:
+            lines.append(f"  {stage.stage:<20} ok")
+        else:
+            lines.append(f"  {stage.stage:<20} FAILED   ({stage.reason})")
+    lines.append(f"\nTotal: {report.total_ok} ok, {report.total_failed} failed.")
+    return "\n".join(lines)
+
+
+def cmd_all(args: argparse.Namespace) -> int:
+    try:
+        ctx = game_detect.require_game(args.path)
+    except UnrenError as exc:
+        result: Result = Result.failure(exc)
+        if args.json:
+            _emit(args, text="", json_data=result.to_dict())
+        else:
+            ui_output.print_error(exc.message, no_color=args.no_color)
+        return 1
+
+    report = run_all.run_all(ctx=ctx, dry_run=args.dry_run, force=args.force)
+
+    result = Result.success(report)
+    if args.json:
+        _emit(args, text="", json_data=result.to_dict())
+    elif not args.quiet:
+        print(_format_all_text(report))
+
+    return 1 if report.total_failed > 0 else 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -450,8 +664,12 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_extract(args)
     if args.command == "decompile":
         return cmd_decompile(args)
-    if args.command in NOT_YET_IMPLEMENTED:
-        return cmd_stub(args, args.command)
+    if args.command in PATCH_ACTIONS:
+        return cmd_patch_action(args, args.command)
+    if args.command == "cleanup":
+        return cmd_cleanup(args)
+    if args.command == "all":
+        return cmd_all(args)
 
     parser.print_help()
     return 2

@@ -120,10 +120,10 @@ def test_doctor_text_smoke(tmp_path: Path) -> None:
     assert "Tools available:" in proc.stdout
 
 
-def test_stub_subcommand_reports_not_implemented(renpy8_game: Path) -> None:
-    proc = _run_unren("console", str(renpy8_game))
-    assert proc.returncode == 3
-    assert "not yet implemented" in (proc.stdout + proc.stderr)
+def test_console_enable_requires_subaction(renpy8_game: Path) -> None:
+    proc = _run_unren("console")
+    assert proc.returncode == 2
+    assert "sub-action" in (proc.stdout + proc.stderr).lower()
 
 
 def test_decompile_no_rpyc_found(renpy8_game: Path) -> None:
@@ -324,3 +324,147 @@ def test_decompile_unknown_format_reported_as_error_not_skipped(tmp_path: Path) 
     # the valid file must still have been processed successfully alongside it
     good_entry = next(f for f in files if f["source"].endswith("options.rpyc"))
     assert good_entry["skipped_reason"] is None
+
+
+def _build_patch_game(tmp_path: Path) -> Path:
+    game_root = tmp_path / "PatchGame"
+    game_dir = game_root / "game"
+    game_dir.mkdir(parents=True)
+    (game_root / "renpy").mkdir()
+    (game_root / "renpy" / "version.py").write_text('version = "8.1.0"\n')
+    return game_root
+
+
+@pytest.mark.parametrize(
+    "command,marker_filename,expected_substring",
+    [
+        ("console", "unren-console.rpy", "config.console = True"),
+        ("devmode", "unren-debug.rpy", "config.debug = True"),
+        ("skip", "unren-skip.rpy", "allow_skipping"),
+        ("skipall", "unren-skipall.rpy", "_preferences.transitions"),
+        ("rollback", "unren-rollback.rpy", "rollback_enabled"),
+        ("quicksave", "unren-quicksave.rpy", "QuickSave"),
+        ("quickmenu", "unren-qmenu.rpy", "quick_menu"),
+        ("nosync", "unren-nsync.rpy", "has_sync"),
+    ],
+)
+def test_patch_action_enable_writes_marker(
+    tmp_path: Path, command: str, marker_filename: str, expected_substring: str
+) -> None:
+    game_root = _build_patch_game(tmp_path)
+    proc = _run_unren(command, "enable", str(game_root))
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    marker = game_root / "game" / marker_filename
+    assert marker.is_file()
+    assert expected_substring in marker.read_text()
+
+
+def test_patch_action_enable_idempotent(tmp_path: Path) -> None:
+    game_root = _build_patch_game(tmp_path)
+    proc1 = _run_unren("console", "enable", str(game_root))
+    assert proc1.returncode == 0
+    proc2 = _run_unren("console", "enable", str(game_root))
+    assert proc2.returncode == 0
+    assert "already present" in (proc2.stdout + proc2.stderr).lower()
+
+
+def test_patch_action_dry_run_writes_nothing(tmp_path: Path) -> None:
+    game_root = _build_patch_game(tmp_path)
+    proc = _run_unren("--dry-run", "console", "enable", str(game_root))
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert not (game_root / "game" / "unren-console.rpy").exists()
+
+
+def test_patch_action_json_output(tmp_path: Path) -> None:
+    game_root = _build_patch_game(tmp_path)
+    proc = _run_unren("--json", "skip", "enable", str(game_root))
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    data = json.loads(proc.stdout)
+    assert data["ok"] is True
+    assert data["value"]["applied"] is True
+
+
+def test_cleanup_restore_no_backups_not_error(tmp_path: Path) -> None:
+    game_root = _build_patch_game(tmp_path)
+    proc = _run_unren("cleanup", "restore", str(game_root))
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Nothing to do" in proc.stdout
+
+
+def test_cleanup_restore_moves_backup_back(tmp_path: Path) -> None:
+    game_root = _build_rpa_game(tmp_path)
+    out_dir = game_root / "unren-extracted"
+    out_dir.mkdir()
+    (out_dir / "script.rpyc").write_text("stale content")
+
+    proc = _run_unren("extract", "--force", str(game_root))
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    backup = game_root / ".unren" / "backups" / "unren-extracted" / "script.rpyc"
+    assert backup.read_text() == "stale content"
+
+    proc = _run_unren("cleanup", "restore", str(game_root))
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert (out_dir / "script.rpyc").read_text() == "stale content"
+    assert not backup.exists()
+
+
+def test_cleanup_delete_requires_yes(tmp_path: Path) -> None:
+    game_root = _build_rpa_game(tmp_path)
+    out_dir = game_root / "unren-extracted"
+    out_dir.mkdir()
+    (out_dir / "script.rpyc").write_text("stale content")
+    _run_unren("extract", "--force", str(game_root))
+
+    proc = _run_unren("cleanup", "delete", str(game_root))
+    assert proc.returncode != 0
+    assert "irreversible" in (proc.stdout + proc.stderr).lower()
+    backup = game_root / ".unren" / "backups" / "unren-extracted" / "script.rpyc"
+    assert backup.exists()
+
+
+def test_cleanup_delete_with_yes_removes_backups(tmp_path: Path) -> None:
+    game_root = _build_rpa_game(tmp_path)
+    out_dir = game_root / "unren-extracted"
+    out_dir.mkdir()
+    (out_dir / "script.rpyc").write_text("stale content")
+    _run_unren("extract", "--force", str(game_root))
+    backup = game_root / ".unren" / "backups" / "unren-extracted" / "script.rpyc"
+    assert backup.exists()
+
+    proc = _run_unren("cleanup", "delete", "--yes", str(game_root))
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert not backup.exists()
+
+
+def test_all_command_runs_every_stage(tmp_path: Path) -> None:
+    game_root = _build_patch_game(tmp_path)
+    proc = _run_unren("--json", "all", str(game_root))
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    data = json.loads(proc.stdout)
+    stages = {s["stage"]: s for s in data["value"]["stages"]}
+    assert set(stages) == {
+        "extract",
+        "decompile",
+        "console_enable",
+        "devmode_enable",
+        "skip_enable",
+        "rollback_enable",
+        "quicksave_enable",
+        "quickmenu_enable",
+        "disable_save_sync",
+    }
+    assert all(s["ok"] or s["skipped"] for s in stages.values())
+    assert (game_root / "game" / "unren-console.rpy").is_file()
+    assert (game_root / "game" / "unren-debug.rpy").is_file()
+
+
+def test_all_command_dry_run_writes_nothing(tmp_path: Path) -> None:
+    game_root = _build_patch_game(tmp_path)
+    proc = _run_unren("--dry-run", "all", str(game_root))
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert not (game_root / "game" / "unren-console.rpy").exists()
+
+
+def test_all_command_fails_closed_on_non_game_dir(non_game_dir: Path) -> None:
+    proc = _run_unren("all", str(non_game_dir))
+    assert proc.returncode != 0

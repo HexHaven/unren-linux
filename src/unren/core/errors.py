@@ -56,3 +56,15 @@ class OverwriteProtectionError(UnrenError):
     """A mutating action refused to overwrite existing destination file(s)."""
 
     code = "overwrite-protection"
+
+
+class MissingGameDirectoryError(UnrenError):
+    """An action requires a `game/` directory to write into, but none was found."""
+
+    code = "missing-game-directory"
+
+
+class ConfirmationRequiredError(UnrenError):
+    """A genuinely destructive/irreversible action was requested without explicit confirmation."""
+
+    code = "confirmation-required"

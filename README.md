@@ -21,11 +21,11 @@ its original author(s). See [`LICENSE`](./LICENSE) for the full license text.
 This is an independent, unofficial port — not affiliated with or endorsed by the upstream
 project maintainers.
 
-## Status: Milestone 3 — RPYC Decompilation
+## Status: Milestone 4 — Remaining UnRen Features
 
-Detection/diagnostics (Milestone 1), RPA archive **extraction** (Milestone 2), and RPYC
-**decompilation** (Milestone 3) are implemented. Game-patching actions (console/debug/skip
-toggles etc.) are not yet available — those land in later milestones (M4+).
+Detection/diagnostics (Milestone 1), RPA archive **extraction** (Milestone 2), RPYC
+**decompilation** (Milestone 3), and the primary game-patching actions plus backup
+cleanup and a bulk `all` command (Milestone 4) are implemented.
 
 Currently available:
 
@@ -57,16 +57,34 @@ Currently available:
   (`unren-decompiled/` default, `--output`, `--in-place`) and overwrite-protection
   (`--force` + `.unren/backups/`) contract as `extract`. `--try-harder` passes through to
   unrpyc's own obfuscation-workaround flag.
-- All commands support `--json` for machine-readable output.
-
-`console`, `devmode`, `all` subcommands are registered in the CLI but are stubs that print
-"not yet implemented" and exit non-zero — they are listed so `unren --help` documents the
-intended full surface, but do nothing destructive.
+- `unren console enable [PATH]` — enable Ren'Py's built-in developer console + developer
+  mode (`game/unren-console.rpy`). Idempotent: re-running is a no-op if already applied.
+- `unren devmode enable [PATH]` — enable `config.debug` (`game/unren-debug.rpy`). Idempotent.
+- `unren skip enable [PATH]` / `unren skipall enable [PATH]` — force-skip seen dialogue, or
+  seen+unseen dialogue with transitions disabled.
+- `unren rollback enable [PATH]` — force-enable rollback (undo/scroll-back) with a large
+  history buffer, even for games that disabled it.
+- `unren quicksave enable [PATH]` — bind F5/F9 to QuickSave/QuickLoad.
+- `unren quickmenu enable [PATH]` — force the quick-menu overlay always visible.
+- `unren nosync enable [PATH]` — disable Ren'Py's cross-device save-sync.
+- `unren cleanup restore [PATH]` / `unren cleanup delete [PATH] --yes` — restore or
+  permanently delete files under `<game_root>/.unren/backups/` created by other mutating
+  actions. `delete` is irreversible and requires `--yes` (or `--dry-run` to preview).
+- `unren all [PATH] [--force]` — runs every non-destructive action above in a fixed, safe
+  order (detect → extract → decompile → console/devmode → skip/rollback/quicksave/
+  quickmenu/nosync). Never runs `cleanup`.
+- All commands support `--json` for machine-readable output and `--dry-run` (global flag)
+  to preview mutating actions without writing anything.
 
 Detection is **read-only** and **fail-closed**: if the Ren'Py generation/version cannot be
 positively established via any of the seven detection strategies, it is reported as
-`unknown` rather than guessed — and `decompile` in turn refuses to pick a decompiler variant
-for an `unknown` generation rather than guess.
+`unknown` rather than guessed — and `decompile`/`all` in turn refuse to pick a decompiler
+variant for an `unknown` generation rather than guess.
+
+Not yet implemented (SHOULD/COULD-priority per `docs/UPSTREAM-BEHAVIOR.md`, later
+milestones): addon installers, character-name replacement, native translate-stub
+scaffolding, the `altrpatool` "modified header" extraction fallback, and WOS SHIELD
+pre-decrypt.
 
 ## Install
 

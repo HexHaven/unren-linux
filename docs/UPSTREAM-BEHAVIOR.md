@@ -305,3 +305,70 @@ contradicting the batch's own stale `v2.0.4` comment) and §7.7 (the `RPATOOL_NE
 gate: confirmed driven by bundled-Python-version detection, not `RENPYVERSION`). Items §7.2–§7.6
 remain open and require either a Windows/Wine sandbox run or real protected-game fixtures to close
 fully.*
+
+---
+
+## 8. Milestone 4 parity check — game-config-patch action family + cleanup
+
+Milestone 4 implements every **MUST**-priority parity-matrix row that was still outstanding
+after M1-M3 (console, debug, skip, skipall, rollback, restore_files, delete_backups) plus the
+**SHOULD**-priority quicksave/quickmenu/nasty_sync rows, and adds the `unren all` bulk command
+described in the Bauplan (§7). This section records the actual parity verification performed
+against §5's Parity Matrix — not just "implemented", but "checked against the row's documented
+Windows-Implementierung / Portable Semantik columns".
+
+| Upstream row | Linux command | Match check performed | Verdict |
+|---|---|---|---|
+| Enable console/dev mode (`:console`, `ACT.a`) | `unren console enable` | Content diff: upstream writes exactly `config.console = True` + `config.developer = True` to `game/unren-console.rpy`, skip-if-present. Port writes the identical two assignments (wrapped in `init 999 python:` for correct compile-time ordering vs. upstream's presumed bare-`.rpy`-python-block style) to the same filename, with the same skip-if-present idempotency, manually verified via CLI smoke test (write once, verify content, re-run, verify no-op). | **Match** (semantic; wrapped in explicit `init 999 python:` block for clarity/robustness, not a behavioral difference) |
+| Enable debug mode (`:debug`, `ACT.b`) | `unren devmode enable` | Same check as console: single assignment `config.debug = True` to `game/unren-debug.rpy`. | **Match** |
+| Force-skip (`:skip`, `ACT.c`) | `unren skip enable` | Upstream sets `allow_skipping`, `skip_unseen`, `skip_after_choices`, `fast_skipping`, Ctrl skip-keymap, `persistent.game_completed`. Port sets the same five flags plus `config.keymap["skip"] = ["K_LCTRL", "K_RCTRL"]` (Ren'Py's actual keymap-dict API for binding the skip action to both Ctrl keys — upstream's own keymap-patch mechanism isn't visible byte-for-byte from the batch source beyond "sets Ctrl as skip keymap", so this is the direct, documented Ren'Py API equivalent). | **Match** (semantic — keymap API call is the portable equivalent of "sets Ctrl as skip keymap") |
+| Force-skip-all (`:skipall`, `ACT.d`) | `unren skipall enable` | Same base flags as `:skip` plus `_preferences.transitions = 0`, per the row's own note that this is the *only* real differentiator from `:skip` (both already set `skip_unseen=True`). Port's `enable_skip_all` does exactly this: identical flag set + `_preferences.transitions = 0`. | **Match** |
+| Rollback enable (`:rollback`, `ACT.e`) | `unren rollback enable` | Upstream: `rollback_enabled=True`, `hard_rollback_limit=256`, `rollback_length=256`, monkeypatches `renpy.block_rollback` to a no-op, PageUp/mouse-4 keymap. Port sets all three config values identically (256/256 buffer sizes matched exactly) and monkeypatches `renpy.block_rollback = lambda: None`. Keymap binding (PageUp/mouse-4) intentionally omitted — Ren'Py's *default* rollback keymap already includes mouse-wheel-up/PageUp out of the box, so this only matters for games that removed it, a narrower edge case; flagged here as a **documented partial deviation**, not silently dropped. | **Partial match** (core semantics 1:1; upstream's explicit keymap re-binding not reproduced — documented) |
+| Quick Save/Load (`:quick`, `ACT.f`) | `unren quicksave enable` | Upstream binds F5→QuickSave, F9→QuickLoad via `config.underlay[0].keymap`. Port uses the identical `config.underlay[0].keymap["K_F5"]`/`["K_F9"]` assignment pattern with `QuickSave()`/`QuickLoad()` action objects (Ren'Py's standard API for these). | **Match** |
+| Quick-menu force-on (`:qmenu`, `ACT.g`) | `unren quickmenu enable` | Upstream appends callbacks to `config.overlay_functions`/`config.interact_callbacks` forcing `store.quick_menu = True`. Port appends one callback function to both of the same two config lists, setting the same flag. | **Match** |
+| Remove nasty AppData sync folder (`:nasty_sync`, `ACT.n`) | `unren nosync enable` | Upstream: `renpy.config.has_sync = False`, `renpy.config.extra_savedirs = []`, written at `init 9999` (highest priority, to override game-set values). Port writes the identical two assignments at the same `init 9999` priority to `game/unren-nsync.rpy`. Doc text updated per the row's own instruction (no `%APPDATA%`-specific wording — see README/module docstring). | **Match** |
+| Restore original files from backups (`:restore_files`, `ACT.r`) | `unren cleanup restore` | **Deliberate semantic deviation, not a bug**: upstream walks `game/` for flat `*.rpa.org`/`*.rpy.org`/`*.rpyc.org` siblings and renames them back. This port's Milestone 2 already committed to the Bauplan's alternative centralized `.unren/backups/<relative-path>` scheme instead (see `unren.core.backup` module docstring, written *before* M4 specifically so this action could target one predictable tree). `cleanup restore` therefore restores from the centralized tree, not `*.org` siblings. Functionally equivalent ("undo the last backed-up overwrite"), byte-for-byte upstream mechanism intentionally not replicated. | **Semantic match, documented mechanism deviation** |
+| Delete backups (`:delete_backups`, `ACT.s`) | `unren cleanup delete --yes` | Same centralized-tree deviation as `restore_files` above. Additionally: upstream returns nonzero exit on "nothing to delete" while `:restore_files` doesn't (flagged as a likely oversight in §7.4) — port deliberately does **not** reproduce this inconsistency; both `cleanup` operations return 0 on "nothing to do". Confirmation gating (`--yes`) is a Linux-port-only hardening addition (upstream has no equivalent prompt for this specific action beyond generic Y/N menu confirmation) since this is the sole irreversible action in the whole family. | **Semantic match; intentional exit-code-consistency fix + added confirmation gate, both documented** |
+| `unren all` (Bauplan §7, no single direct upstream row — corresponds to `ACT.5`/`ACT.6` "run all common operations" combo menu options) | `unren all [PATH]` | Upstream combo options bundle a fixed subset of actions (varies by which combo). Port runs the full non-destructive action set implemented through M4 in the task-card-mandated safety order (detect → extract → decompile → console/devmode → additive patches), explicitly excluding `cleanup` (destructive/undo actions don't belong in a bulk "apply" command - no upstream combo option includes `:restore_files`/`:delete_backups` either, so this exclusion is itself consistent with upstream's own combo-menu design). | **Design-level parity** (same "convenience bundle, safe subset, excludes destructive ops" principle as upstream's combo menu, not a byte-for-byte feature-list match since upstream's exact combo contents couldn't be fully re-derived from the batch source without a live run) |
+
+### Verification method
+
+Every row above was checked two ways:
+1. **Static**: content of the generated `.rpy` file / assignment set compared line-by-line
+   against the corresponding Windows-Implementierung cell in §5.
+2. **Dynamic**: each new action was smoke-tested against synthetic fixture game directories
+   via the real installed CLI (`unren <action> enable /path/to/fixture`), confirming: the
+   marker file is created with the expected content, a second invocation is a true no-op
+   (file content unchanged, `already_present=True` in JSON output), `--dry-run` performs zero
+   filesystem writes, and (for `cleanup`) a real backup created by `extract --force` round-trips
+   correctly through both `restore` and `delete --yes`. All 72 new automated tests (unit +
+   integration) added for Milestone 4 encode these same checks reproducibly — see
+   `tests/unit/test_game_patch.py`, `test_enable_console_devmode.py`, `test_game_patches.py`,
+   `test_cleanup_action.py`, `test_run_all_action.py`, and the new cases in
+   `tests/integration/test_cli.py`.
+
+### Deferred (SHOULD/COULD rows not implemented this milestone)
+
+Per the Exit Criterion ("COULD Features markiert aber nicht blocker"), the following
+parity-matrix rows remain unimplemented and are explicitly out of scope for M4:
+
+- Universal Gallery Unlocker / Universal Choice Descriptor / Universal Transparent Text Box /
+  0x52_URM addon installers, and the generic custom add-on installer (`ACT.h/i/j/k/p`) —
+  all fetch and execute third-party content from a fixed external host at runtime; each needs
+  its own network-mocking test fixture and a separate security-hardening discussion
+  (checksum verification) before landing. SHOULD/COULD priority.
+- Replace character name (`:replace_anyname`, `ACT.l`) — pure-Python regex logic, portable,
+  but needs its own interactive-prompt design (CLI flags for old/new name) not yet specified.
+  SHOULD priority.
+- Extract text for translation (`:extract_text`, `ACT.t`) — delegates to the game's own
+  bundled Ren'Py `translate` CLI; needs a real Ren'Py runtime integration-test fixture the
+  project doesn't have yet. SHOULD priority.
+- `altrpatool`/game's-own-`renpy.loader` extraction fallback for non-standard archive headers
+  — needs real modified-archive fixtures to test meaningfully. SHOULD priority (deferred
+  since Milestone 2, re-confirmed still deferred here).
+- WOS SHIELD pre-decrypt step — needs a real WOS-shielded game sample to validate against;
+  flagged as functionally understood but unverified since Milestone 0. SHOULD priority
+  (niche, automatic pre-step to decompile, not a user-facing action).
+- Check for update (`:check_update`, `ACT.u`) — explicit non-goal as a self-mutating script;
+  any future version belongs to packaging/versioning (Bauplan §21), not this action family.
+  COULD priority.

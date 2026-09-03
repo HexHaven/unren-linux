@@ -100,3 +100,86 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   milestone — detected and reported, but extraction is refused with a clear
   error rather than guessed at.
 - No RPYC decompilation or game-patching actions yet (Milestone 3+).
+
+## [Unreleased] - Milestone 4: Remaining UnRen Features
+
+### Added
+
+- `unren.core.game_patch`: shared helper for the whole family of upstream
+  actions that write one small, static, idempotent `.rpy` file into `game/`
+  and skip (no-op) if it already exists (`docs/UPSTREAM-BEHAVIOR.md` §5).
+  Centralizes the "check-before-write, never overwrite the marker" mechanism
+  used by every action below instead of duplicating it five times.
+- `unren.actions.enable_console` / `unren console enable [PATH]`: writes
+  `game/unren-console.rpy` (`config.console = True`, `config.developer = True`),
+  1:1 parity with upstream `:console` (`ACT.a`). **MUST**.
+- `unren.actions.enable_devmode` / `unren devmode enable [PATH]`: writes
+  `game/unren-debug.rpy` (`config.debug = True`), 1:1 parity with upstream
+  `:debug` (`ACT.b`). **MUST**.
+- `unren.actions.game_patches` (`unren <name> enable [PATH]` for each):
+  - `skip` → `game/unren-skip.rpy` — force-skip seen dialogue (`:skip`, `ACT.c`). **MUST**.
+  - `skipall` → `game/unren-skipall.rpy` — force-skip incl. unseen + disabled
+    transitions (`:skipall`, `ACT.d`). **MUST**.
+  - `rollback` → `game/unren-rollback.rpy` — force-enable rollback with a
+    256-entry history buffer, neutralizes `renpy.block_rollback` (`:rollback`,
+    `ACT.e`). **MUST**.
+  - `quicksave` → `game/unren-quicksave.rpy` — bind F5/F9 to QuickSave/
+    QuickLoad (`:quick`, `ACT.f`). **SHOULD**.
+  - `quickmenu` → `game/unren-qmenu.rpy` — force the quick-menu overlay always
+    visible (`:qmenu`, `ACT.g`). **SHOULD**.
+  - `nosync` → `game/unren-nsync.rpy` — disable Ren'Py's cross-device
+    save-sync (`:nasty_sync`, `ACT.n`; kept as a generically useful toggle on
+    Linux even though the upstream OneDrive-conflict motivation doesn't
+    directly apply). **SHOULD**.
+- `unren.actions.cleanup` / `unren cleanup restore|delete [PATH]`: restore or
+  permanently delete files under the centralized `.unren/backups/` tree
+  (Milestone 2's `unren.core.backup` scheme). Semantic (not byte-for-byte)
+  parity with upstream `:restore_files`/`:delete_backups` (`ACT.r`/`ACT.s`)
+  — see module docstring for the deliberate, documented deviation from
+  upstream's flat `.org`-suffix convention. `delete` is irreversible and
+  requires `--yes` (unless `--dry-run`) — the one destructive action in this
+  whole family, gated behind explicit confirmation per the parity matrix's
+  own note. Both operations treat "nothing to do" as success (exit 0),
+  intentionally *not* reproducing upstream's own `:delete_backups` vs.
+  `:restore_files` exit-code inconsistency (documented in
+  `docs/UPSTREAM-BEHAVIOR.md` §7.4). **MUST**.
+- `unren.actions.run_all` / `unren all [PATH] [--force]`: runs every
+  implemented non-destructive action in a fixed, safety-ordered sequence
+  (detect → extract → decompile → console/devmode → skip/rollback/quicksave/
+  quickmenu/nosync), matching the task card's required ordering. Every
+  stage's outcome (ok/skipped/failed) is recorded in the report even when an
+  earlier stage fails or a later stage is structurally skipped (e.g.
+  decompile skipped on unknown Ren'Py generation) — fail-closed, no silent
+  skip. Deliberately excludes `cleanup restore`/`cleanup delete` (destructive/
+  irreversible operations don't belong in a bulk "apply everything" command).
+- `unren.core.errors`: `MissingGameDirectoryError` (a patch action was asked
+  to write into a `game/` dir that doesn't exist) and
+  `ConfirmationRequiredError` (an irreversible action was requested without
+  explicit confirmation).
+- CLI wiring for all of the above, with `--json` output and `--dry-run`
+  support throughout, consistent with `extract`/`decompile`'s existing
+  contract.
+- Test suite: unit tests for `core.game_patch`, `enable_console`,
+  `enable_devmode`, `game_patches` (parametrized across all six actions),
+  `cleanup` (restore/delete, confirmation gating, dry-run, "nothing to do"),
+  and `run_all` (stage ordering, unknown-generation skip, missing-game-dir
+  skip, dry-run, idempotency); CLI integration tests for every new
+  subcommand (marker-file content, idempotency, `--json`, `--dry-run`,
+  `cleanup restore`/`cleanup delete --yes` round-tripping real backups from
+  `extract --force`, and `unren all` end-to-end).
+
+### Known limitations (by design, this milestone)
+
+- Addon installers (Universal Gallery Unlocker, Universal Choice Descriptor,
+  Universal Transparent Text Box, 0x52_URM, custom add-on installer),
+  `replace_anyname` (character-name replacement), `extract_text` (Ren'Py
+  native translate-stub scaffolding), the `altrpatool`/"with key" extraction
+  fallback, and WOS SHIELD pre-decrypt remain out of scope — all SHOULD/COULD
+  priority per the parity matrix, not MUST, and each has its own
+  network-dependency, external-tool-dependency, or fixture-availability risk
+  flagged in `docs/UPSTREAM-BEHAVIOR.md` §5 warranting separate follow-up
+  milestones rather than being folded into this one.
+- No interactive UI (bare `unren`/`unren PATH` still just prints help;
+  Milestone 5).
+- Context-menu registry integration and self-update remain explicit
+  non-goals on Linux (`docs/UPSTREAM-BEHAVIOR.md` §3).
