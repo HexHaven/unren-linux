@@ -1,4 +1,4 @@
-# Maintainer: UnRen-forall-linux contributors
+# Maintainer: xNyxion <core@nyxion.cloud>
 #
 # Builds directly from the enclosing project checkout (this PKGBUILD lives at
 # packaging/arch/PKGBUILD inside the repo it packages) rather than from a
@@ -9,7 +9,7 @@
 # version bumps in pyproject.toml.
 
 pkgname=unren-forall-linux
-pkgver=0.1.0
+pkgver=0.1.0.r17.gee9004b
 pkgrel=1
 pkgdesc="Native Linux port of UnRen-forall (Ren'Py game detection/utility toolkit)"
 arch=('any')

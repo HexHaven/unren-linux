@@ -11,7 +11,17 @@ extraction, PowerShell). See `docs/UPSTREAM-BEHAVIOR.md` for a full parity matri
 upstream behavior to this port's design, and `Proposed-Bauplan.md` for the overall project
 plan.
 
-## Credit & License
+## Attribution & License
+
+UnRen-Linux is licensed under the GNU General Public License v3 or later (GPLv3+).
+
+This work builds upon the original UnRen project and its derivatives:
+- **Original Windows UnRen** by `sam` (f95zone.to)
+- **Batch version** by `goobdoob` (f95zone.to)
+- **Mac/Linux port** by `huchukato`
+- **Current upstream** `Lurmel/UnRen-forall` (multi-platform reference implementation)
+
+The Linux port is maintained by xNyxion.
 
 This project is a derivative work of `Lurmel/UnRen-forall`, licensed under the
 **GNU General Public License v3.0 or later (GPLv3+)**. All credit for the original toolkit
