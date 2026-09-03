@@ -18,23 +18,20 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
 
-UNREN_EXE = shutil.which("unren")
+from tests.integration._launch import resolve_unren_cmd
 
 
 def _run_unren(*args: str) -> subprocess.CompletedProcess:
-    # See tests/integration/test_cli.py::_run_unren for why PYTHONPATH takes
-    # precedence over a stale installed `unren` on PATH.
-    if os.environ.get("PYTHONPATH"):
-        cmd = [sys.executable, "-m", "unren", *args]
-    else:
-        cmd = [UNREN_EXE, *args] if UNREN_EXE else [sys.executable, "-m", "unren", *args]
+    # See tests/integration/_launch.py::resolve_unren_cmd for why the
+    # binary under test is resolved explicitly (PYTHONPATH source tree, else
+    # the repo's own .venv/bin/unren by absolute path) and never via a
+    # shutil.which("unren") PATH lookup.
+    cmd = [*resolve_unren_cmd(), *args]
     return subprocess.run(cmd, capture_output=True, text=True, timeout=30)
 
 

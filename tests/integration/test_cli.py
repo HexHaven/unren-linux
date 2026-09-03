@@ -8,34 +8,27 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
 
-UNREN_EXE = shutil.which("unren")
+from tests.integration._launch import resolve_unren_cmd
 
 
 def _run_unren(
     *args: str, input: str | None = None, env: dict[str, str] | None = None, cwd: str | None = None
 ) -> subprocess.CompletedProcess:
-    # Prefer testing the checkout under test (via `python -m unren`) whenever
-    # PYTHONPATH points at a source tree, e.g. `PYTHONPATH=src pytest ...`
-    # (the project's own documented invocation) or makepkg's check() step
-    # (`PYTHONPATH="$_repo_root/src" python -m pytest ...`, which runs
-    # *before* package()/package installation). Falling back to whatever
-    # `unren` happens to be on PATH is wrong in both cases: it silently
-    # exercises a stale, previously-installed build instead of the code
-    # actually being tested, which is indistinguishable from a real
-    # regression (see bare-invocation cwd-detection tests below).
-    if os.environ.get("PYTHONPATH"):
-        cmd = [sys.executable, "-m", "unren", *args]
-    elif UNREN_EXE:
-        cmd = [UNREN_EXE, *args]
-    else:  # pragma: no cover - fallback if not installed as a script somehow
-        cmd = [sys.executable, "-m", "unren", *args]
+    # Resolve the binary under test explicitly (PYTHONPATH source tree, else
+    # the repo's own .venv/bin/unren by absolute path) - never via a PATH
+    # lookup. A plain `shutil.which("unren")` PATH lookup is wrong here: if
+    # the project's .venv isn't first on PATH (e.g. venv not activated),
+    # it silently exercises a stale, previously-installed system build
+    # instead of the code actually being tested, which is indistinguishable
+    # from a real regression (see bare-invocation cwd-detection tests below,
+    # and test_integration_uses_venv_unren_not_system_unren for the
+    # regression guard).
+    cmd = [*resolve_unren_cmd(), *args]
     run_env = dict(os.environ)
     # PYTHONPATH is commonly set relative to the invocation cwd (e.g. the
     # documented `PYTHONPATH=src python -m pytest ...`); resolve it to an
@@ -762,3 +755,48 @@ def test_menu_console_enable_action_writes_same_marker_as_direct_cli(tmp_path: P
     menu_marker = menu_root / "game" / "unren-console.rpy"
     assert menu_marker.is_file()
     assert menu_marker.read_text() == direct_marker.read_text()
+
+
+# --- PATH isolation regression (see tests/integration/_launch.py) ----------
+
+
+def test_integration_uses_venv_unren_not_system_unren(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression guard for the M2 PATH-isolation bug.
+
+    Poisons PATH with a fake `unren` stub (and clears PYTHONPATH, so the
+    resolver can't take the source-tree branch either) and verifies both
+    that `resolve_unren_cmd()` still returns the repo's own
+    `.venv/bin/unren` by absolute path, and that an actual `_run_unren()`
+    invocation runs that real binary rather than the fake PATH stub -
+    proving the test harness never falls back to a `shutil.which("unren")`
+    PATH lookup that could silently pick up a stale system install.
+    """
+    from tests.integration._launch import VENV_UNREN, resolve_unren_cmd
+
+    assert VENV_UNREN.is_file(), "expected the repo's .venv/bin/unren to exist for this test to be meaningful"
+
+    fake_bin_dir = tmp_path / "fakebin"
+    fake_bin_dir.mkdir()
+    fake_unren = fake_bin_dir / "unren"
+    invoked_marker = tmp_path / "fake_unren_was_invoked"
+    fake_unren.write_text(
+        "#!/bin/sh\n"
+        f"echo invoked > {invoked_marker}\n"
+        "echo 'FAKE-SYSTEM-UNREN 0.0.0-stale'\n"
+        "exit 0\n"
+    )
+    fake_unren.chmod(0o755)
+
+    monkeypatch.delenv("PYTHONPATH", raising=False)
+    monkeypatch.setenv("PATH", str(fake_bin_dir))
+
+    # The resolver itself must never do a PATH lookup.
+    assert resolve_unren_cmd() == [str(VENV_UNREN)]
+
+    # And an actual invocation through the shared test helper must run the
+    # real .venv binary, not the fake stub now sitting first (and only) on PATH.
+    proc = _run_unren("--version")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert not invoked_marker.exists(), "fake system unren stub on PATH was invoked instead of .venv/bin/unren"
+    assert "FAKE-SYSTEM-UNREN" not in proc.stdout
+    assert "unren" in proc.stdout.lower()
