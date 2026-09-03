@@ -21,15 +21,16 @@ import sys
 from pathlib import Path
 
 from unren import __version__
-from unren.actions import extract_rpa
+from unren.actions import decompile_rpyc, extract_rpa
 from unren.core.config import UnrenConfig, find_config
 from unren.core.errors import UnrenError
 from unren.core.result import Result
 from unren.detection import game as game_detect
 from unren.detection.archives import ArchiveInfo
+from unren.detection.rpyc import find_rpyc_files
 from unren.ui import output as ui_output
 
-NOT_YET_IMPLEMENTED = ("decompile", "console", "devmode", "all")
+NOT_YET_IMPLEMENTED = ("console", "devmode", "all")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -102,6 +103,29 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         help="Overwrite existing destination files (backs them up first under .unren/backups/).",
+    )
+
+    decompile_p = subparsers.add_parser(
+        "decompile", help="Decompile .rpyc/.rpymc files from a game.", parents=[sub_global_opts]
+    )
+    decompile_p.add_argument("path", nargs="?", default=".", help="Path to the game directory.")
+    decompile_p.add_argument(
+        "--in-place",
+        action="store_true",
+        default=False,
+        help="Decompile next to the original .rpyc files instead of a separate unren-decompiled/ folder.",
+    )
+    decompile_p.add_argument(
+        "--force",
+        action="store_true",
+        default=False,
+        help="Overwrite existing .rpy/.rpym files (backs them up first under .unren/backups/; passes --clobber to unrpyc).",
+    )
+    decompile_p.add_argument(
+        "--try-harder",
+        action="store_true",
+        default=False,
+        help="Pass --try-harder to unrpyc (workarounds for common obfuscation; slower).",
     )
 
     for name in NOT_YET_IMPLEMENTED:
@@ -322,6 +346,77 @@ def cmd_extract(args: argparse.Namespace) -> int:
     return 1 if report.total_failed == report.total_archives else 0
 
 
+def _format_decompile_text(report: decompile_rpyc.DecompileReport) -> str:
+    lines = [
+        f"Game root:       {report.game_root}",
+        f"Output:          {report.output_root}" + (" (in-place)" if report.in_place else ""),
+        f"Mode:            {'dry-run (no files written)' if report.dry_run else 'decompiled'}",
+        f"Variant:         {report.variant or 'unresolved'}",
+        f"Runtime:         {report.runtime_executable or 'none'} (source={report.runtime_source})",
+        f"Files found:     {report.total_files}",
+    ]
+    if not report.files:
+        lines.append("No .rpyc/.rpymc files found.")
+        return "\n".join(lines)
+
+    for plan in report.files:
+        lines.append(f"\n{plan.source}  [{plan.rpyc_format}]")
+        if not plan.ok:
+            lines.append(f"  skipped: {plan.skipped_reason}")
+            continue
+        if report.dry_run:
+            lines.append(f"  would decompile to {plan.destination}")
+        else:
+            lines.append(f"  decompiled to {plan.destination}" if plan.exists else "  FAILED (see log)")
+
+    lines.append(
+        f"\nTotal: {report.decompiled} file(s) decompiled, {report.total_failed} file(s) failed/skipped."
+    )
+    return "\n".join(lines)
+
+
+def cmd_decompile(args: argparse.Namespace) -> int:
+    try:
+        ctx = game_detect.detect_game(args.path)
+    except UnrenError as exc:
+        result: Result = Result.failure(exc)
+        if args.json:
+            _emit(args, text="", json_data=result.to_dict())
+        else:
+            ui_output.print_error(exc.message, no_color=args.no_color)
+        return 1
+
+    try:
+        report = decompile_rpyc.decompile(
+            game_root=ctx.root,
+            game_dir=ctx.game_dir,
+            generation=ctx.renpy_version.generation,
+            output=args.output,
+            in_place=args.in_place,
+            dry_run=args.dry_run,
+            force=args.force,
+            try_harder=args.try_harder,
+            rpyc_files=find_rpyc_files(ctx.root),
+        )
+    except UnrenError as exc:
+        result = Result.failure(exc)
+        if args.json:
+            print(__import__("json").dumps(result.to_dict(), indent=2))
+        else:
+            ui_output.print_error(exc.message, no_color=args.no_color)
+        return 1
+
+    result = Result.success(report)
+    if args.json:
+        print(__import__("json").dumps(result.to_dict(), indent=2, sort_keys=False))
+    elif not args.quiet:
+        print(_format_decompile_text(report))
+
+    if report.total_files == 0:
+        return 0
+    return 1 if report.total_failed == report.total_files else 0
+
+
 def cmd_stub(args: argparse.Namespace, name: str) -> int:
     message = (
         f"'{name}' is not yet implemented in this milestone (Linux Core Skeleton). "
@@ -353,6 +448,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_doctor(args)
     if args.command == "extract":
         return cmd_extract(args)
+    if args.command == "decompile":
+        return cmd_decompile(args)
     if args.command in NOT_YET_IMPLEMENTED:
         return cmd_stub(args, args.command)
 

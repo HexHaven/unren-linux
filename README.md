@@ -21,11 +21,11 @@ its original author(s). See [`LICENSE`](./LICENSE) for the full license text.
 This is an independent, unofficial port — not affiliated with or endorsed by the upstream
 project maintainers.
 
-## Status: Milestone 2 — RPA Extraction
+## Status: Milestone 3 — RPYC Decompilation
 
-Detection/diagnostics (Milestone 1) plus RPA archive **extraction** are implemented.
-Decompilation and game-patching actions are not yet available — those land in later
-milestones (M3+).
+Detection/diagnostics (Milestone 1), RPA archive **extraction** (Milestone 2), and RPYC
+**decompilation** (Milestone 3) are implemented. Game-patching actions (console/debug/skip
+toggles etc.) are not yet available — those land in later milestones (M4+).
 
 Currently available:
 
@@ -43,15 +43,30 @@ Currently available:
   up first under `<game_root>/.unren/backups/`). Formats not yet supported for extraction
   (RPAN-3.0/ZiX-12A/12B/SVAC-1.0/RWA-3.0 "neutron" archives) are reported per-archive rather
   than guessed at.
+- `unren decompile [PATH]` — decompile `.rpyc`/`.rpymc` files found under `PATH` to `.rpy`
+  using a version-pinned, vendored copy of
+  [`CensoredUsername/unrpyc`](https://github.com/CensoredUsername/unrpyc) (see
+  `src/unren/vendor/README.md` for full provenance). Automatically selects the correct
+  variant + Python runtime for the detected Ren'Py generation: the "current" variant
+  (v2.0.3, Python 3.9+) for Ren'Py >=8, the "legacy" variant (v1.3.2, real Python 2) for
+  Ren'Py <=7 when a Python 2 runtime is resolvable (system or Ren'Py-bundled), falling back
+  to the "current" variant otherwise (documented risk: Python 2 is frequently unavailable on
+  modern systems — the fallback was verified to still successfully decompile real Ren'Py
+  7-era files). A `.rpyc`/`.rpymc` file whose container header matches neither known RPYC
+  format is reported as a per-file error, never silently skipped. Same output-management
+  (`unren-decompiled/` default, `--output`, `--in-place`) and overwrite-protection
+  (`--force` + `.unren/backups/`) contract as `extract`. `--try-harder` passes through to
+  unrpyc's own obfuscation-workaround flag.
 - All commands support `--json` for machine-readable output.
 
-`decompile`, `console`, `devmode`, `all` subcommands are registered in the CLI but are stubs
-that print "not yet implemented" and exit non-zero — they are listed so `unren --help`
-documents the intended full surface, but do nothing destructive.
+`console`, `devmode`, `all` subcommands are registered in the CLI but are stubs that print
+"not yet implemented" and exit non-zero — they are listed so `unren --help` documents the
+intended full surface, but do nothing destructive.
 
 Detection is **read-only** and **fail-closed**: if the Ren'Py generation/version cannot be
 positively established via any of the seven detection strategies, it is reported as
-`unknown` rather than guessed.
+`unknown` rather than guessed — and `decompile` in turn refuses to pick a decompiler variant
+for an `unknown` generation rather than guess.
 
 ## Install
 

@@ -121,9 +121,16 @@ def test_doctor_text_smoke(tmp_path: Path) -> None:
 
 
 def test_stub_subcommand_reports_not_implemented(renpy8_game: Path) -> None:
-    proc = _run_unren("decompile", str(renpy8_game))
+    proc = _run_unren("console", str(renpy8_game))
     assert proc.returncode == 3
     assert "not yet implemented" in (proc.stdout + proc.stderr)
+
+
+def test_decompile_no_rpyc_found(renpy8_game: Path) -> None:
+    # renpy8_game fixture has no .rpyc files, only an .rpa archive.
+    proc = _run_unren("decompile", str(renpy8_game))
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "No .rpyc/.rpymc files found" in proc.stdout
 
 
 def test_bare_invocation_prints_help_and_exits_3() -> None:
@@ -219,3 +226,101 @@ def test_extract_no_archives_found(tmp_path: Path) -> None:
     proc = _run_unren("extract", str(game_root))
     assert proc.returncode == 0
     assert "No RPA archives found" in proc.stdout
+
+
+RPYC_FIXTURES = Path(__file__).parent.parent / "fixtures" / "rpyc_samples"
+
+
+def _build_decompile_game(tmp_path: Path, *, generation_major: str = "8.1.0") -> Path:
+    game_root = tmp_path / "DecompileGame"
+    game_dir = game_root / "game"
+    game_dir.mkdir(parents=True)
+    (game_root / "renpy").mkdir()
+    (game_root / "renpy" / "version.py").write_text(f'version = "{generation_major}"\n')
+    (game_dir / "options.rpyc").write_bytes((RPYC_FIXTURES / "current8_options.rpyc").read_bytes())
+    return game_root
+
+
+def test_decompile_creates_default_output_dir(tmp_path: Path) -> None:
+    game_root = _build_decompile_game(tmp_path)
+    proc = _run_unren("decompile", str(game_root))
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    out_file = game_root / "unren-decompiled" / "game" / "options.rpy"
+    assert out_file.is_file()
+    assert len(out_file.read_text(encoding="utf-8")) > 0
+
+
+def test_decompile_dry_run_makes_no_changes(tmp_path: Path) -> None:
+    game_root = _build_decompile_game(tmp_path)
+    proc = _run_unren("--dry-run", "decompile", str(game_root))
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "dry-run" in proc.stdout.lower() or "would decompile" in proc.stdout.lower()
+    assert not (game_root / "unren-decompiled").exists()
+    # original .rpyc must survive untouched
+    assert (game_root / "game" / "options.rpyc").read_bytes() == (
+        RPYC_FIXTURES / "current8_options.rpyc"
+    ).read_bytes()
+
+
+def test_decompile_json_output(tmp_path: Path) -> None:
+    game_root = _build_decompile_game(tmp_path)
+    proc = _run_unren("--json", "decompile", str(game_root))
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    data = json.loads(proc.stdout)
+    assert data["ok"] is True
+    assert data["value"]["files"]
+    assert data["value"]["files"][0]["rpyc_format"] == "rpc2"
+    assert data["value"]["decompiled"] == 1
+
+
+def test_decompile_in_place_flag(tmp_path: Path) -> None:
+    game_root = _build_decompile_game(tmp_path)
+    proc = _run_unren("decompile", "--in-place", str(game_root))
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert (game_root / "game" / "options.rpy").is_file()
+    assert not (game_root / "unren-decompiled").exists()
+
+
+def test_decompile_no_overwrite_without_force(tmp_path: Path) -> None:
+    game_root = _build_decompile_game(tmp_path)
+    out_dir = game_root / "unren-decompiled" / "game"
+    out_dir.mkdir(parents=True)
+    (out_dir / "options.rpy").write_text("pre-existing, must survive")
+
+    proc = _run_unren("decompile", str(game_root))
+    assert proc.returncode != 0
+    assert (out_dir / "options.rpy").read_text() == "pre-existing, must survive"
+
+
+def test_decompile_legacy_generation_fixture(tmp_path: Path) -> None:
+    # Ren'Py 7-era fixture: LEGACY generation with no python2 runtime
+    # available in this environment falls back to the vendored 'current'
+    # unrpyc, which successfully handles the real RPC2 sample (verified
+    # unit-level in test_unrpyc_adapter.py) - exercised here end-to-end
+    # through the actual CLI subprocess.
+    game_root = tmp_path / "LegacyGame"
+    game_dir = game_root / "game"
+    game_dir.mkdir(parents=True)
+    (game_root / "renpy").mkdir()
+    (game_root / "renpy" / "version.py").write_text('version = "7.4.11"\n')
+    (game_dir / "script.rpyc").write_bytes((RPYC_FIXTURES / "legacy7_options.rpyc").read_bytes())
+
+    proc = _run_unren("decompile", str(game_root))
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    out_file = game_root / "unren-decompiled" / "game" / "script.rpy"
+    assert out_file.is_file()
+
+
+def test_decompile_unknown_format_reported_as_error_not_skipped(tmp_path: Path) -> None:
+    game_root = _build_decompile_game(tmp_path)
+    (game_root / "game" / "corrupt.rpyc").write_bytes(b"totally bogus rpyc content, not a real container")
+
+    proc = _run_unren("--json", "decompile", str(game_root))
+    data = json.loads(proc.stdout)
+    files = data["value"]["files"]
+    corrupt_entry = next(f for f in files if f["source"].endswith("corrupt.rpyc"))
+    assert corrupt_entry["skipped_reason"] is not None
+    assert "unrecognized" in corrupt_entry["skipped_reason"]
+    # the valid file must still have been processed successfully alongside it
+    good_entry = next(f for f in files if f["source"].endswith("options.rpyc"))
+    assert good_entry["skipped_reason"] is None
