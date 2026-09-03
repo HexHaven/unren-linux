@@ -21,13 +21,33 @@ UNREN_EXE = shutil.which("unren")
 def _run_unren(
     *args: str, input: str | None = None, env: dict[str, str] | None = None, cwd: str | None = None
 ) -> subprocess.CompletedProcess:
-    if UNREN_EXE:
+    # Prefer testing the checkout under test (via `python -m unren`) whenever
+    # PYTHONPATH points at a source tree, e.g. `PYTHONPATH=src pytest ...`
+    # (the project's own documented invocation) or makepkg's check() step
+    # (`PYTHONPATH="$_repo_root/src" python -m pytest ...`, which runs
+    # *before* package()/package installation). Falling back to whatever
+    # `unren` happens to be on PATH is wrong in both cases: it silently
+    # exercises a stale, previously-installed build instead of the code
+    # actually being tested, which is indistinguishable from a real
+    # regression (see bare-invocation cwd-detection tests below).
+    if os.environ.get("PYTHONPATH"):
+        cmd = [sys.executable, "-m", "unren", *args]
+    elif UNREN_EXE:
         cmd = [UNREN_EXE, *args]
     else:  # pragma: no cover - fallback if not installed as a script somehow
         cmd = [sys.executable, "-m", "unren", *args]
-    run_env = None
+    run_env = dict(os.environ)
+    # PYTHONPATH is commonly set relative to the invocation cwd (e.g. the
+    # documented `PYTHONPATH=src python -m pytest ...`); resolve it to an
+    # absolute path before handing it to a child process launched with a
+    # *different* cwd (these tests exercise cwd-dependent behavior), or the
+    # child silently fails to find the source tree and falls back to
+    # whatever `unren` package happens to be importable on sys.path instead.
+    if run_env.get("PYTHONPATH"):
+        run_env["PYTHONPATH"] = os.pathsep.join(
+            os.path.abspath(p) if p else p for p in run_env["PYTHONPATH"].split(os.pathsep)
+        )
     if env is not None:
-        run_env = dict(os.environ)
         run_env.update(env)
     return subprocess.run(cmd, capture_output=True, text=True, timeout=30, input=input, env=run_env, cwd=cwd)
 

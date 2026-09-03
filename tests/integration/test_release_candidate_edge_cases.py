@@ -29,7 +29,12 @@ UNREN_EXE = shutil.which("unren")
 
 
 def _run_unren(*args: str) -> subprocess.CompletedProcess:
-    cmd = [UNREN_EXE, *args] if UNREN_EXE else [sys.executable, "-m", "unren", *args]
+    # See tests/integration/test_cli.py::_run_unren for why PYTHONPATH takes
+    # precedence over a stale installed `unren` on PATH.
+    if os.environ.get("PYTHONPATH"):
+        cmd = [sys.executable, "-m", "unren", *args]
+    else:
+        cmd = [UNREN_EXE, *args] if UNREN_EXE else [sys.executable, "-m", "unren", *args]
     return subprocess.run(cmd, capture_output=True, text=True, timeout=30)
 
 
