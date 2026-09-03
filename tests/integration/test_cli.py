@@ -17,12 +17,12 @@ import pytest
 UNREN_EXE = shutil.which("unren")
 
 
-def _run_unren(*args: str) -> subprocess.CompletedProcess:
+def _run_unren(*args: str, input: str | None = None) -> subprocess.CompletedProcess:
     if UNREN_EXE:
         cmd = [UNREN_EXE, *args]
     else:  # pragma: no cover - fallback if not installed as a script somehow
         cmd = [sys.executable, "-m", "unren", *args]
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=30, input=input)
 
 
 def test_json_flag_after_subcommand(renpy8_game: Path) -> None:
@@ -133,10 +133,23 @@ def test_decompile_no_rpyc_found(renpy8_game: Path) -> None:
     assert "No .rpyc/.rpymc files found" in proc.stdout
 
 
-def test_bare_invocation_prints_help_and_exits_3() -> None:
-    proc = _run_unren()
-    assert proc.returncode == 3
-    assert "usage" in (proc.stdout + proc.stderr).lower()
+def test_bare_invocation_starts_interactive_menu_and_exits_0_on_immediate_eof() -> None:
+    # Milestone 5: bare `unren` (no subcommand) launches the interactive
+    # menu (ui/interactive.py) instead of just printing help. Feeding an
+    # immediately-closed stdin (empty input) simulates the user hitting
+    # Ctrl-D at the first prompt, which the menu loop treats as a clean quit.
+    proc = _run_unren(input="")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "unren" in proc.stdout.lower()
+
+
+def test_bare_invocation_menu_lists_core_actions_and_quits_on_q() -> None:
+    proc = _run_unren(input="q\n")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    out = proc.stdout
+    assert "detect" in out.lower()
+    assert "diagnostics" in out.lower()  # menu.option.doctor label
+    assert "extract" in out.lower()
 
 
 def _build_rpa_game(tmp_path: Path, *, version: str = "RPA-3.0") -> Path:

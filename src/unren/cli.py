@@ -651,10 +651,13 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.command is None:
-        # Bare `unren` / `unren PATH` -> interactive mode is out of scope for
-        # this milestone (ui/interactive.py is Milestone 5).
-        parser.print_help()
-        return 3
+        # Bare `unren` (no subcommand) launches the interactive menu
+        # (Milestone 5, Bauplan §7). Lazily imported to avoid a circular
+        # import at module load time: ui/interactive.py dispatches menu
+        # actions by calling back into this module's `main()`.
+        from unren.ui.interactive import run as run_interactive
+
+        return run_interactive()
 
     if args.command == "detect":
         return cmd_detect(args)
