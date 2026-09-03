@@ -12,6 +12,7 @@
   "menu.prompt.try_harder": "Härter versuchen (langsamer, behandelt mehr Verschleierung)? [j/N]: ",
   "menu.invalid_choice": "Ungültige Auswahl: {choice}",
   "menu.invalid_path": "Pfad existiert nicht: {path}",
+  "menu.no_game_in_cwd": "Kein Ren'Py-Spiel im aktuellen Verzeichnis erkannt. Bitte einen Spielpfad angeben: unren /pfad/zum/spiel",
   "menu.goodbye": "Auf Wiedersehen.",
   "menu.back": "Zurück",
   "menu.quit": "Beenden",

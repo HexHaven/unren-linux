@@ -748,12 +748,16 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command is None:
         # Bare `unren` (no subcommand) launches the interactive menu
-        # (Milestone 5, Bauplan §7). Lazily imported to avoid a circular
-        # import at module load time: ui/interactive.py dispatches menu
-        # actions by calling back into this module's `main()`.
-        from unren.ui.interactive import run as run_interactive
+        # (Milestone 5, Bauplan §7) - but only after `launch()` checks
+        # whether the cwd itself looks like a Ren'Py game; see
+        # unren.ui.interactive.launch() for the full three-case contract
+        # (this cwd-auto-detect follow-up task). Lazily imported to avoid
+        # a circular import at module load time: ui/interactive.py
+        # dispatches menu actions by calling back into this module's
+        # `main()`.
+        from unren.ui.interactive import launch as launch_interactive
 
-        return run_interactive()
+        return launch_interactive()
 
     try:
         if args.command == "detect":

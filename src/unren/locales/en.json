@@ -12,6 +12,7 @@
   "menu.prompt.try_harder": "Try harder (slower, handles more obfuscation)? [y/N]: ",
   "menu.invalid_choice": "Invalid choice: {choice}",
   "menu.invalid_path": "Path does not exist: {path}",
+  "menu.no_game_in_cwd": "No Ren'Py game detected in current directory. Please specify a game path: unren /path/to/game",
   "menu.goodbye": "Goodbye.",
   "menu.back": "Back",
   "menu.quit": "Quit",

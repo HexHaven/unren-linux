@@ -1,7 +1,14 @@
-"""Interactive menu loop for unren (Milestone 5).
+"""Interactive menu loop for unren (Milestone 5; cwd auto-detect follow-up).
 
 Launched by `unren.cli.main()` when invoked with no subcommand at all
-(bare `unren`). This module is a *pure UI wrapper*: every menu action is
+(bare `unren`), via `launch()`, which first checks whether the current
+working directory itself looks like a Ren'Py game (`game/` + `renpy/`
+subfolders) before opening the menu; see `launch()`'s docstring for the
+exact three-case contract. `unren <path>` (an explicit path argument)
+never goes through `launch()` - it's dispatched straight to the matching
+CLI subcommand handler by `unren.cli.main()`, independent of cwd.
+
+This module is a *pure UI wrapper*: every menu action is
 dispatched by building the equivalent `argv` a user would type on the
 command line and handing it straight to :func:`unren.cli.main` - the exact
 same entry point `unren <command> ...` uses from a shell. No business
@@ -19,6 +26,7 @@ drift: adding a menu entry *is* adding a CLI invocation.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Callable
 
 from unren.ui import output as ui_output
@@ -190,6 +198,40 @@ def _dispatch(argv: list[str]) -> int:
     except SystemExit as exc:  # argparse errors, --version/--help, etc.
         code = exc.code
         return code if isinstance(code, int) else 1
+
+
+def _has_renpy_game_markers(path: Path) -> bool:
+    """True if `path` directly contains both a `game/` and a `renpy/` dir.
+
+    Deliberately a lightweight, cwd-only pre-check (not the real detection
+    cascade in `unren.detection.game`, which this module never imports -
+    see the module docstring): it only decides whether bare `unren` may
+    open the menu for the current directory, nothing more.
+    """
+    return (path / "game").is_dir() and (path / "renpy").is_dir()
+
+
+def launch(*, cwd: "Path | None" = None, ctx: "MenuContext | None" = None) -> int:
+    """Entry point for a bare `unren` invocation (no subcommand, no path).
+
+    Distinguishes the two bare-invocation cases from the CLI's `main()`:
+
+    1. cwd is a recognized Ren'Py game directory (has both `game/` and
+       `renpy/`) -> open the menu as before (`run()`); every menu prompt
+       already defaults to "." (= cwd), so no other change is needed.
+    2. cwd is not recognized -> print a translated error with a hint and
+       return a non-zero exit code, without ever starting the menu loop.
+
+    `unren <path>` (an explicit path argument) never goes through this
+    function - `unren.cli.main()` dispatches it straight to the matching
+    `cmd_*` handler, independent of cwd, exactly as before.
+    """
+    ctx = ctx or MenuContext()
+    cwd = cwd if cwd is not None else Path.cwd()
+    if not _has_renpy_game_markers(cwd):
+        ui_output.print_error(t("menu.no_game_in_cwd", path=str(cwd)), no_color=ctx.no_color)
+        return 1
+    return run(ctx=ctx)
 
 
 def run(*, ctx: "MenuContext | None" = None) -> int:

@@ -19,7 +19,7 @@ UNREN_EXE = shutil.which("unren")
 
 
 def _run_unren(
-    *args: str, input: str | None = None, env: dict[str, str] | None = None
+    *args: str, input: str | None = None, env: dict[str, str] | None = None, cwd: str | None = None
 ) -> subprocess.CompletedProcess:
     if UNREN_EXE:
         cmd = [UNREN_EXE, *args]
@@ -29,7 +29,7 @@ def _run_unren(
     if env is not None:
         run_env = dict(os.environ)
         run_env.update(env)
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=30, input=input, env=run_env)
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=30, input=input, env=run_env, cwd=cwd)
 
 
 def test_json_flag_after_subcommand(renpy8_game: Path) -> None:
@@ -140,23 +140,73 @@ def test_decompile_no_rpyc_found(renpy8_game: Path) -> None:
     assert "No .rpyc/.rpymc files found" in proc.stdout
 
 
-def test_bare_invocation_starts_interactive_menu_and_exits_0_on_immediate_eof() -> None:
+def test_bare_invocation_starts_interactive_menu_and_exits_0_on_immediate_eof(renpy8_game: Path) -> None:
     # Milestone 5: bare `unren` (no subcommand) launches the interactive
-    # menu (ui/interactive.py) instead of just printing help. Feeding an
-    # immediately-closed stdin (empty input) simulates the user hitting
-    # Ctrl-D at the first prompt, which the menu loop treats as a clean quit.
-    proc = _run_unren(input="")
+    # menu (ui/interactive.py) instead of just printing help, when cwd is a
+    # recognized Ren'Py game directory (cwd auto-detect follow-up task).
+    # Feeding an immediately-closed stdin (empty input) simulates the user
+    # hitting Ctrl-D at the first prompt, which the menu loop treats as a
+    # clean quit.
+    proc = _run_unren(input="", cwd=str(renpy8_game))
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "unren" in proc.stdout.lower()
 
 
-def test_bare_invocation_menu_lists_core_actions_and_quits_on_q() -> None:
-    proc = _run_unren(input="q\n")
+def test_bare_invocation_menu_lists_core_actions_and_quits_on_q(renpy8_game: Path) -> None:
+    proc = _run_unren(input="q\n", cwd=str(renpy8_game))
     assert proc.returncode == 0, proc.stdout + proc.stderr
     out = proc.stdout
     assert "detect" in out.lower()
     assert "diagnostics" in out.lower()  # menu.option.doctor label
     assert "extract" in out.lower()
+
+
+# --- cwd auto-detection on bare `unren` (no argument) -----------------------
+
+
+def test_bare_invocation_in_game_directory_opens_menu_directly(renpy8_game: Path) -> None:
+    # Case 1: `unren` (no args) run with cwd inside a recognized Ren'Py
+    # game directory (has game/ and renpy/) must open the menu directly,
+    # without requiring the path to be typed at a prompt.
+    proc = _run_unren(input="q\n", cwd=str(renpy8_game))
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "goodbye" in proc.stdout.lower()
+
+
+def test_bare_invocation_outside_game_directory_prints_error(tmp_path: Path) -> None:
+    # Case 2: `unren` (no args) run with cwd NOT a recognized Ren'Py game
+    # must print an error with a hint instead of opening the menu.
+    not_a_game = tmp_path / "just_a_folder"
+    not_a_game.mkdir()
+    proc = _run_unren(input="", cwd=str(not_a_game))
+    assert proc.returncode != 0
+    combined = proc.stdout + proc.stderr
+    assert "No Ren'Py game detected in current directory" in combined
+    assert "unren /path/to/game" in combined
+
+
+def test_explicit_path_argument_works_regardless_of_cwd(tmp_path: Path, renpy8_game: Path) -> None:
+    # Case 3: `unren <path>` (explicit argument) behaves unchanged
+    # regardless of cwd - dispatches straight to `detect`, never touches
+    # the interactive-menu cwd auto-detection at all.
+    not_a_game_cwd = tmp_path / "unrelated_cwd"
+    not_a_game_cwd.mkdir()
+    proc = _run_unren("detect", str(renpy8_game), cwd=str(not_a_game_cwd))
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Game found:      yes" in proc.stdout or "Spiel gefunden:  ja" in proc.stdout
+
+
+def test_bare_invocation_outside_game_directory_error_is_translated(tmp_path: Path) -> None:
+    # The cwd-not-a-game error message is a translated string like every
+    # other CLI/menu message - German via UNREN_LANGUAGE must produce the
+    # German text, not the English fallback.
+    not_a_game = tmp_path / "kein_spiel"
+    not_a_game.mkdir()
+    proc = _run_unren(input="", env={"UNREN_LANGUAGE": "de"}, cwd=str(not_a_game))
+    assert proc.returncode != 0
+    combined = proc.stdout + proc.stderr
+    assert "Kein Ren'Py-Spiel im aktuellen Verzeichnis erkannt" in combined
+    assert "unren /pfad/zum/spiel" in combined
 
 
 def _build_rpa_game(tmp_path: Path, *, version: str = "RPA-3.0") -> Path:
@@ -618,10 +668,10 @@ def test_language_env_var_lc_lang_fallback_forces_german_end_to_end(tmp_path: Pa
     assert "Spiel gefunden:" in proc.stdout
 
 
-def test_language_env_var_forces_german_interactive_menu() -> None:
+def test_language_env_var_forces_german_interactive_menu(renpy8_game: Path) -> None:
     # Same env-var precedence path, but through the bare (menu) invocation
     # rather than a subcommand - the menu must be translated too.
-    proc = _run_unren(input="q\n", env={"UNREN_LANGUAGE": "de"})
+    proc = _run_unren(input="q\n", env={"UNREN_LANGUAGE": "de"}, cwd=str(renpy8_game))
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "Auf Wiedersehen" in proc.stdout
     assert "Goodbye" not in proc.stdout
@@ -644,7 +694,7 @@ def test_menu_detect_action_produces_same_report_text_as_direct_cli_detect(
     idx = [a.key for a in interactive.ACTIONS].index("detect") + 1
     # select detect, supply the game path, press-enter past the pause, quit.
     menu_input = f"{idx}\n{renpy6_game}\n\nq\n"
-    via_menu = _run_unren(input=menu_input)
+    via_menu = _run_unren(input=menu_input, cwd=str(renpy6_game))
     assert via_menu.returncode == 0, via_menu.stdout + via_menu.stderr
 
     for line in direct.stdout.strip().splitlines():
@@ -687,7 +737,7 @@ def test_menu_console_enable_action_writes_same_marker_as_direct_cli(tmp_path: P
     menu_root = _build_patch_game(tmp_path / "via-menu")
     idx = [a.key for a in interactive.ACTIONS].index("console") + 1
     menu_input = f"{idx}\n{menu_root}\n\nq\n"
-    via_menu = _run_unren(input=menu_input)
+    via_menu = _run_unren(input=menu_input, cwd=str(menu_root))
     assert via_menu.returncode == 0, via_menu.stdout + via_menu.stderr
     menu_marker = menu_root / "game" / "unren-console.rpy"
     assert menu_marker.is_file()

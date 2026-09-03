@@ -133,3 +133,73 @@ def test_every_action_maps_to_a_real_cli_subcommand() -> None:
         argv = action.build_argv(ctx)
         assert argv is not None
         assert argv[0] in valid_commands, f"menu action {action.key!r} dispatches unknown command {argv[0]!r}"
+
+
+# --- launch(): cwd auto-detection on bare `unren` invocation ----------------
+
+
+def test_launch_opens_menu_when_cwd_is_a_game_directory(tmp_path: Path) -> None:
+    game_root = tmp_path / "SomeGame"
+    (game_root / "game").mkdir(parents=True)
+    (game_root / "renpy").mkdir()
+
+    ctx = _ctx(["q"])
+    code = interactive.launch(cwd=game_root, ctx=ctx)
+    assert code == 0
+
+
+def test_launch_errors_when_cwd_is_not_a_game_directory(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    not_a_game = tmp_path / "not_a_game"
+    not_a_game.mkdir()
+
+    ctx = _ctx([])  # menu must never prompt - it should bail out first
+    code = interactive.launch(cwd=not_a_game, ctx=ctx)
+    assert code != 0
+    captured = capsys.readouterr()
+    combined = (captured.out + captured.err).lower()
+    assert "no ren'py game detected" in combined or "kein ren'py-spiel" in combined
+    assert "unren /path/to/game" in (captured.out + captured.err)
+
+
+def test_launch_errors_without_starting_the_menu_loop(tmp_path: Path) -> None:
+    # Regression guard: the error path must return before ever calling
+    # ctx.input_fn - if it prompted, the empty-iterator fake_input below
+    # would raise StopIteration instead of a clean early return.
+    not_a_game = tmp_path / "empty"
+    not_a_game.mkdir()
+
+    def fail_input(_prompt: str) -> str:
+        raise AssertionError("menu must not prompt when cwd is not a recognized game")
+
+    ctx = interactive.MenuContext(no_color=True, input_fn=fail_input)
+    code = interactive.launch(cwd=not_a_game, ctx=ctx)
+    assert code == 1
+
+
+def test_launch_only_requires_game_dir_or_renpy_dir_both_present(tmp_path: Path) -> None:
+    # Only `game/` present, no `renpy/` -> still not recognized.
+    only_game = tmp_path / "only_game"
+    (only_game / "game").mkdir(parents=True)
+
+    def fail_input(_prompt: str) -> str:
+        raise AssertionError("menu must not prompt for a partial/unrecognized structure")
+
+    ctx = interactive.MenuContext(no_color=True, input_fn=fail_input)
+    code = interactive.launch(cwd=only_game, ctx=ctx)
+    assert code == 1
+
+
+def test_launch_defaults_cwd_to_path_cwd_when_not_given(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    game_root = tmp_path / "DefaultCwdGame"
+    (game_root / "game").mkdir(parents=True)
+    (game_root / "renpy").mkdir()
+    monkeypatch.chdir(game_root)
+
+    ctx = _ctx(["q"])
+    code = interactive.launch(ctx=ctx)  # no explicit cwd= -> must use Path.cwd()
+    assert code == 0
+

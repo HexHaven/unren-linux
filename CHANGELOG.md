@@ -344,3 +344,34 @@ this narrowing and were fully verified.
   coverage beyond the fixture-based + M3.5 real-file verification already
   in place) - see `docs/UNRPYC-COVERAGE.md` for that separate, manual,
   real-SDK verification pass.
+
+## [Unreleased] - Menu enhancement: cwd auto-detect on bare `unren`
+
+### Changed
+
+- Bare `unren` (no subcommand, no path) now inspects the current working
+  directory before opening the interactive menu (`unren.ui.interactive`):
+  - cwd directly contains both `game/` and `renpy/` (recognized Ren'Py
+    game) -> the menu opens directly for that directory, same as before.
+  - cwd is not recognized -> prints a translated error ("No Ren'Py game
+    detected in current directory. Please specify a game path: unren
+    /path/to/game" / German equivalent) and exits non-zero, instead of
+    opening the menu.
+  - `unren <path>` (an explicit path argument) is unaffected - it still
+    dispatches straight to the matching CLI subcommand regardless of cwd,
+    exactly as before.
+  - New `unren.ui.interactive.launch()` (called from `unren.cli.main()`
+    instead of `run()` directly) implements this cwd pre-check; `run()`
+    itself is unchanged and still used directly by every existing
+    unit/integration test that drives the menu loop.
+  - New locale key `menu.no_game_in_cwd` in both `en.json`/`de.json`.
+- Tests: 5 new unit tests (`tests/unit/test_interactive_menu.py`) covering
+  `launch()`'s three cases directly (in-game cwd, non-game cwd, partial
+  structure, default-cwd resolution, no-prompt-before-bailing regression
+  guard) plus 4 new/updated integration tests
+  (`tests/integration/test_cli.py`) exercising the real subprocess CLI in
+  both cwd scenarios and confirming `unren <path>` behavior is unchanged
+  regardless of cwd. Pre-existing bare-invocation/menu integration tests
+  were updated to run with `cwd` set to a recognized game fixture, since
+  bare `unren` no longer unconditionally opens the menu. Full suite:
+  313/313 passed (`PYTHONPATH=src python3 -m pytest tests/ -q`).
