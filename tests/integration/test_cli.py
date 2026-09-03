@@ -7,6 +7,7 @@ actual packaging/entry-point wiring, not just the in-process argparse logic.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -17,12 +18,18 @@ import pytest
 UNREN_EXE = shutil.which("unren")
 
 
-def _run_unren(*args: str, input: str | None = None) -> subprocess.CompletedProcess:
+def _run_unren(
+    *args: str, input: str | None = None, env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess:
     if UNREN_EXE:
         cmd = [UNREN_EXE, *args]
     else:  # pragma: no cover - fallback if not installed as a script somehow
         cmd = [sys.executable, "-m", "unren", *args]
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=30, input=input)
+    run_env = None
+    if env is not None:
+        run_env = dict(os.environ)
+        run_env.update(env)
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=30, input=input, env=run_env)
 
 
 def test_json_flag_after_subcommand(renpy8_game: Path) -> None:
@@ -481,3 +488,98 @@ def test_all_command_dry_run_writes_nothing(tmp_path: Path) -> None:
 def test_all_command_fails_closed_on_non_game_dir(non_game_dir: Path) -> None:
     proc = _run_unren("all", str(non_game_dir))
     assert proc.returncode != 0
+
+
+# --- Milestone 5 (CLI flags): --language / --no-color / colored output ----
+
+
+def test_language_flag_forces_german_output(tmp_path: Path) -> None:
+    proc = _run_unren("--language", "de", "doctor", str(tmp_path))
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "unren doctor" in proc.stdout
+    assert "Spiel gefunden:" in proc.stdout
+    assert "Game found:" not in proc.stdout
+
+
+def test_language_flag_after_subcommand_also_works(tmp_path: Path) -> None:
+    # Same bugfix pattern as --json: global flags must work either before or
+    # after the subcommand.
+    proc = _run_unren("doctor", "--language", "de", str(tmp_path))
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Spiel gefunden:" in proc.stdout
+
+
+def test_default_language_is_english(tmp_path: Path) -> None:
+    proc = _run_unren("doctor", str(tmp_path), env={"LC_LANG": "", "LANG": "", "LC_ALL": "", "UNREN_LANGUAGE": ""})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Game found:" in proc.stdout
+
+
+def test_language_flag_translates_error_messages() -> None:
+    proc_en = _run_unren("detect", "/definitely/does/not/exist/anywhere")
+    proc_de = _run_unren("--language", "de", "detect", "/definitely/does/not/exist/anywhere")
+    assert proc_en.returncode == 1
+    assert proc_de.returncode == 1
+    assert "Path not found" in (proc_en.stdout + proc_en.stderr)
+    assert "Pfad nicht gefunden" in (proc_de.stdout + proc_de.stderr)
+
+
+def test_no_color_flag_produces_no_ansi_escapes(tmp_path: Path) -> None:
+    proc = _run_unren("--no-color", "doctor", str(tmp_path), env={"FORCE_COLOR": "1"})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "\x1b[" not in proc.stdout
+    assert "\x1b[" not in proc.stderr
+
+
+def test_no_color_flag_suppresses_error_ansi_escapes() -> None:
+    proc = _run_unren(
+        "--no-color", "detect", "/definitely/does/not/exist/anywhere", env={"FORCE_COLOR": "1"}
+    )
+    assert "\x1b[" not in (proc.stdout + proc.stderr)
+
+
+def test_colored_output_exists_when_no_color_not_set(tmp_path: Path) -> None:
+    # FORCE_COLOR forces Rich to emit ANSI even though stdout is a pipe
+    # (not a real TTY) under the test harness. `console enable` output
+    # contains a status keyword ("wrote"/"already present") that
+    # print_report() highlights, so colored output is guaranteed present.
+    game_root = _build_patch_game(tmp_path)
+    proc = _run_unren("console", "enable", str(game_root), env={"FORCE_COLOR": "1"})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "\x1b[" in proc.stdout
+
+
+def test_colored_error_output_exists_when_no_color_not_set() -> None:
+    proc = _run_unren("detect", "/definitely/does/not/exist/anywhere", env={"FORCE_COLOR": "1"})
+    assert "\x1b[" in (proc.stdout + proc.stderr)
+
+
+def test_no_color_flag_after_subcommand_also_works(tmp_path: Path) -> None:
+    proc = _run_unren("doctor", "--no-color", str(tmp_path), env={"FORCE_COLOR": "1"})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "\x1b[" not in proc.stdout
+
+
+# --- Milestone 5: menu vs CLI parity (coverage check) ----------------------
+
+
+def test_every_interactive_menu_action_has_an_equivalent_direct_cli_command() -> None:
+    """Structural parity: every unren.ui.interactive.ACTIONS entry must map
+    onto a real `unren [COMMAND]` invocation recognized by the real argparse
+    parser this same process uses - the CLI surface can never drift out of
+    sync with the menu it's paired with."""
+    from unren.cli import build_parser
+    from unren.ui import interactive
+
+    parser = build_parser()
+    valid_commands = set(parser._subparsers._group_actions[0].choices.keys())  # type: ignore[attr-defined]
+
+    def _ctx() -> interactive.MenuContext:
+        answers = iter(["/tmp"] + ["y"] * 6)
+        return interactive.MenuContext(no_color=True, input_fn=lambda _prompt: next(answers))
+
+    assert len(interactive.ACTIONS) > 0
+    for action in interactive.ACTIONS:
+        argv = action.build_argv(_ctx())
+        assert argv is not None
+        assert argv[0] in valid_commands, f"menu action {action.key!r} has no matching CLI command {argv[0]!r}"

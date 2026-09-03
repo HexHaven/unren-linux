@@ -4,16 +4,23 @@ Surface per Bauplan §7:
 
     unren [GLOBAL OPTIONS] COMMAND [OPTIONS]
 
-Milestone 4 completes the primary action surface: `detect`, `doctor`,
+Milestone 4 completed the primary action surface: `detect`, `doctor`,
 `extract`, `decompile` (M1-M3), plus `console enable`, `devmode enable`,
 `skip enable`, `skipall enable`, `rollback enable`, `quicksave enable`,
 `quickmenu enable`, `nosync enable` (additive `.rpy` game-config patches -
 `unren.actions.enable_console`/`enable_devmode`/`game_patches`), `cleanup
 restore`/`cleanup delete` (`unren.actions.cleanup`), and `all` (runs every
-non-destructive action in a safe order - `unren.actions.run_all`). Running
-with no subcommand at all (bare `unren /path/to/game`, meant to launch the
-interactive UI per Bauplan §7) is still stubbed since ui/interactive.py
-doesn't exist yet (Milestone 5).
+non-destructive action in a safe order - `unren.actions.run_all`).
+
+Milestone 5 adds: bare `unren` (no subcommand) launches the interactive
+menu (`unren.ui.interactive`); a global `--language <code>` flag that
+forces i18n language selection (overriding auto-detection); human-readable,
+translated (`unren.ui.i18n.t()`) text for every command's non-JSON output
+and every error message; and colored output (via `unren.ui.output`, using
+Rich when installed) that's fully suppressed by `--no-color`. Every
+interactive menu action has a directly equivalent `unren [COMMAND]`
+invocation - the menu module (`unren.ui.interactive`) dispatches straight
+into this module's `main()`, so CLI/menu parity is structural.
 """
 
 from __future__ import annotations
@@ -33,7 +40,9 @@ from unren.core.result import Result
 from unren.detection import game as game_detect
 from unren.detection.archives import ArchiveInfo
 from unren.detection.rpyc import find_rpyc_files
+from unren.ui import i18n
 from unren.ui import output as ui_output
+from unren.ui.i18n import t
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -65,6 +74,12 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--quiet", action="store_true", default=default, help="Suppress non-essential output.")
         p.add_argument("--json", action="store_true", default=default, help="Emit machine-readable JSON output.")
         p.add_argument("--no-color", action="store_true", default=default, help="Disable colored output.")
+        p.add_argument(
+            "--language",
+            metavar="CODE",
+            default=(argparse.SUPPRESS if suppress_defaults else None),
+            help="Force a language (e.g. 'de'), overriding auto-detection.",
+        )
         p.add_argument("--output", metavar="PATH", default=(argparse.SUPPRESS if suppress_defaults else None), help="Write output to PATH instead of stdout.")
         p.add_argument("--config", metavar="PATH", default=(argparse.SUPPRESS if suppress_defaults else None), help="Explicit path to a config TOML file.")
         return p
@@ -198,6 +213,42 @@ def _load_config(args: argparse.Namespace) -> UnrenConfig:
     return UnrenConfig.load(cfg_path)
 
 
+def _configure_language(args: argparse.Namespace, cfg: UnrenConfig) -> str:
+    """Resolve + activate the active language for this invocation.
+
+    Precedence (see unren.ui.i18n.detect_language): explicit `--language`
+    CLI flag > env var > config file `language` setting > default `en`.
+    Called once from `main()` after config loading, before any command
+    dispatch, so every `t()` call for the rest of the process uses the
+    resolved language.
+    """
+    return i18n.configure(cli_language=getattr(args, "language", None), config_language=cfg.language)
+
+
+def _no_color(args: argparse.Namespace, cfg: UnrenConfig) -> bool:
+    """Resolve the effective --no-color state: CLI flag OR config setting."""
+    return bool(getattr(args, "no_color", False)) or cfg.no_color
+
+
+def _translate_error(exc: UnrenError) -> str:
+    """Map an UnrenError to its translated `error.<code>` message.
+
+    `exc.code` uses dashes (e.g. "not-a-game-directory"); locale keys use
+    underscores (`error.not_a_game_directory`) per the docs/I18N.md
+    convention. Falls back to the generic `error.unren_error` key for any
+    error code that doesn't have its own dedicated translation key.
+    """
+    key = "error." + exc.code.replace("-", "_")
+    text = t(key, message=exc.message)
+    if text == key:  # translate() returns the raw key when nothing matched
+        text = t("error.unren_error", message=exc.message)
+    return text
+
+
+def _print_translated_error(exc: UnrenError, *, no_color: bool) -> None:
+    ui_output.print_error(_translate_error(exc), no_color=no_color)
+
+
 def _emit(args: argparse.Namespace, *, text: str, json_data: dict) -> None:
     if args.json:
         rendered = __import__("json").dumps(json_data, indent=2, sort_keys=False)
@@ -207,12 +258,15 @@ def _emit(args: argparse.Namespace, *, text: str, json_data: dict) -> None:
     if args.output:
         Path(args.output).write_text(rendered + "\n", encoding="utf-8")
         if not args.quiet:
-            print(f"Output written to {args.output}")
+            ui_output.print_line(t("cli.output_written", path=args.output), no_color=args.no_color)
         return
 
     if args.quiet and not args.json:
         return
-    print(rendered)
+    if args.json:
+        print(rendered)
+    else:
+        ui_output.print_report(rendered, no_color=args.no_color)
 
 
 def cmd_detect(args: argparse.Namespace) -> int:
@@ -223,7 +277,7 @@ def cmd_detect(args: argparse.Namespace) -> int:
         if args.json:
             _emit(args, text="", json_data=result.to_dict())
         else:
-            ui_output.print_error(exc.message, no_color=args.no_color)
+            _print_translated_error(exc, no_color=args.no_color)
         return 1
 
     result = Result.success(ctx)
@@ -294,19 +348,37 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         _emit(args, text="", json_data=result.to_dict())
     else:
         lines = [
-            f"unren doctor - {__version__}",
-            f"OS:              {os_info['system']} {os_info['release']} ({os_info['machine']})",
-            f"Game found:      {'yes' if game_found else 'no'}",
+            t("cli.doctor.header", version=__version__),
+            t(
+                "cli.doctor.os",
+                system=os_info["system"],
+                release=os_info["release"],
+                machine=os_info["machine"],
+            ),
+            t("cli.doctor.game_found", value=t("cli.value.yes") if game_found else t("cli.value.no")),
         ]
         if game_summary:
-            lines.append(f"Ren'Py version:  {game_summary['renpy_generation']} (major={game_summary['renpy_major']})")
+            lines.append(
+                t(
+                    "cli.doctor.renpy_version",
+                    generation=game_summary["renpy_generation"],
+                    major=game_summary["renpy_major"],
+                )
+            )
             rt = game_summary["python_runtime"]
-            lines.append(f"Python runtime:  {rt['executable']} (source={rt['source']})")
-            lines.append(f"Archive formats: {', '.join(game_summary['archive_formats_present']) or 'none'}")
+            lines.append(t("cli.doctor.python_runtime", executable=rt["executable"], source=rt["source"]))
+            lines.append(
+                t(
+                    "cli.doctor.archive_formats",
+                    formats=", ".join(game_summary["archive_formats_present"]) or t("cli.value.none"),
+                )
+            )
         if detection_error:
-            lines.append(f"Detection note:  {detection_error}")
-        tools_line = ", ".join(f"{k}={'yes' if v else 'no'}" for k, v in diagnosis["tools"].items())
-        lines.append(f"Tools available: {tools_line}")
+            lines.append(t("cli.doctor.detection_note", message=detection_error))
+        tools_line = ", ".join(
+            f"{k}={t('cli.value.yes') if v else t('cli.value.no')}" for k, v in diagnosis["tools"].items()
+        )
+        lines.append(t("cli.doctor.tools_available", tools=tools_line))
         _emit(args, text="\n".join(lines), json_data=result.to_dict())
 
     return 0
@@ -314,34 +386,34 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
 def _format_extract_text(report: extract_rpa.ExtractionReport) -> str:
     lines = [
-        f"Game root:       {report.game_root}",
-        f"Output:          {report.output_root}"
-        + (" (in-place)" if report.in_place else ""),
-        f"Mode:            {'dry-run (no files written)' if report.dry_run else 'extracted'}",
-        f"Archives found:  {report.total_archives}",
+        t("cli.extract.game_root", root=report.game_root),
+        t("cli.extract.output", output=str(report.output_root) + (t("cli.extract.in_place_suffix") if report.in_place else "")),
+        t(
+            "cli.extract.mode",
+            mode=t("cli.extract.mode.dry_run") if report.dry_run else t("cli.extract.mode.executed"),
+        ),
+        t("cli.extract.archives_found", count=report.total_archives),
     ]
     if not report.archives:
-        lines.append("No RPA archives found.")
+        lines.append(t("cli.extract.no_archives"))
         return "\n".join(lines)
 
     for plan in report.archives:
-        lines.append(f"\n{plan.archive}  [{plan.format}]")
+        lines.append("\n" + t("cli.extract.archive_entry", archive=plan.archive, format=plan.format))
         if not plan.ok:
-            lines.append(f"  skipped: {plan.skipped_reason}")
+            lines.append(t("cli.extract.skipped", reason=plan.skipped_reason))
             continue
         if report.dry_run:
-            lines.append(f"  would extract {len(plan.members)} file(s) to {plan.output_dir}")
+            lines.append(t("cli.extract.would_extract", count=len(plan.members), output_dir=plan.output_dir))
             if plan.conflicts:
-                lines.append(
-                    f"  WARNING: {len(plan.conflicts)} destination file(s) already exist "
-                    "(would require --force)"
-                )
+                lines.append(t("cli.extract.conflict_warning", count=len(plan.conflicts)))
         else:
-            lines.append(f"  extracted {plan.extracted}/{len(plan.members)} file(s) to {plan.output_dir}")
+            lines.append(
+                t("cli.extract.extracted", extracted=plan.extracted, total=len(plan.members), output_dir=plan.output_dir)
+            )
 
     lines.append(
-        f"\nTotal: {report.total_extracted_files} file(s) extracted, "
-        f"{report.total_failed} archive(s) failed/skipped."
+        "\n" + t("cli.extract.total", extracted=report.total_extracted_files, failed=report.total_failed)
     )
     return "\n".join(lines)
 
@@ -354,7 +426,7 @@ def cmd_extract(args: argparse.Namespace) -> int:
         if args.json:
             _emit(args, text="", json_data=result.to_dict())
         else:
-            ui_output.print_error(exc.message, no_color=args.no_color)
+            _print_translated_error(exc, no_color=args.no_color)
         return 1
 
     # NOTE: for `extract`, --output means "extraction destination directory"
@@ -383,14 +455,14 @@ def cmd_extract(args: argparse.Namespace) -> int:
         if args.json:
             print(__import__("json").dumps(result.to_dict(), indent=2))
         else:
-            ui_output.print_error(exc.message, no_color=args.no_color)
+            _print_translated_error(exc, no_color=args.no_color)
         return 1
 
     result = Result.success(report)
     if args.json:
         print(__import__("json").dumps(result.to_dict(), indent=2, sort_keys=False))
     elif not args.quiet:
-        print(_format_extract_text(report))
+        ui_output.print_report(_format_extract_text(report), no_color=args.no_color)
 
     if report.total_archives == 0:
         return 0
@@ -399,29 +471,43 @@ def cmd_extract(args: argparse.Namespace) -> int:
 
 def _format_decompile_text(report: decompile_rpyc.DecompileReport) -> str:
     lines = [
-        f"Game root:       {report.game_root}",
-        f"Output:          {report.output_root}" + (" (in-place)" if report.in_place else ""),
-        f"Mode:            {'dry-run (no files written)' if report.dry_run else 'decompiled'}",
-        f"Variant:         {report.variant or 'unresolved'}",
-        f"Runtime:         {report.runtime_executable or 'none'} (source={report.runtime_source})",
-        f"Files found:     {report.total_files}",
+        t("cli.decompile.game_root", root=report.game_root),
+        t(
+            "cli.decompile.output",
+            output=str(report.output_root) + (t("cli.decompile.in_place_suffix") if report.in_place else ""),
+        ),
+        t(
+            "cli.decompile.mode",
+            mode=t("cli.decompile.mode.dry_run") if report.dry_run else t("cli.decompile.mode.executed"),
+        ),
+        t("cli.decompile.variant", variant=report.variant or t("cli.decompile.variant.unresolved")),
+        t(
+            "cli.decompile.runtime",
+            executable=report.runtime_executable or t("cli.decompile.runtime.none"),
+            source=report.runtime_source,
+        ),
+        t("cli.decompile.files_found", count=report.total_files),
     ]
     if not report.files:
-        lines.append("No .rpyc/.rpymc files found.")
+        lines.append(t("cli.decompile.no_files"))
         return "\n".join(lines)
 
     for plan in report.files:
-        lines.append(f"\n{plan.source}  [{plan.rpyc_format}]")
+        lines.append("\n" + t("cli.decompile.file_entry", source=plan.source, format=plan.rpyc_format))
         if not plan.ok:
-            lines.append(f"  skipped: {plan.skipped_reason}")
+            lines.append(t("cli.decompile.skipped", reason=plan.skipped_reason))
             continue
         if report.dry_run:
-            lines.append(f"  would decompile to {plan.destination}")
+            lines.append(t("cli.decompile.would_decompile", destination=plan.destination))
         else:
-            lines.append(f"  decompiled to {plan.destination}" if plan.exists else "  FAILED (see log)")
+            lines.append(
+                t("cli.decompile.decompiled", destination=plan.destination)
+                if plan.exists
+                else t("cli.decompile.failed")
+            )
 
     lines.append(
-        f"\nTotal: {report.decompiled} file(s) decompiled, {report.total_failed} file(s) failed/skipped."
+        "\n" + t("cli.decompile.total", decompiled=report.decompiled, failed=report.total_failed)
     )
     return "\n".join(lines)
 
@@ -434,7 +520,7 @@ def cmd_decompile(args: argparse.Namespace) -> int:
         if args.json:
             _emit(args, text="", json_data=result.to_dict())
         else:
-            ui_output.print_error(exc.message, no_color=args.no_color)
+            _print_translated_error(exc, no_color=args.no_color)
         return 1
 
     try:
@@ -454,14 +540,14 @@ def cmd_decompile(args: argparse.Namespace) -> int:
         if args.json:
             print(__import__("json").dumps(result.to_dict(), indent=2))
         else:
-            ui_output.print_error(exc.message, no_color=args.no_color)
+            _print_translated_error(exc, no_color=args.no_color)
         return 1
 
     result = Result.success(report)
     if args.json:
         print(__import__("json").dumps(result.to_dict(), indent=2, sort_keys=False))
     elif not args.quiet:
-        print(_format_decompile_text(report))
+        ui_output.print_report(_format_decompile_text(report), no_color=args.no_color)
 
     if report.total_files == 0:
         return 0
@@ -469,31 +555,32 @@ def cmd_decompile(args: argparse.Namespace) -> int:
 
 
 PATCH_ACTIONS: dict[str, tuple[str, Any]] = {
-    "console": ("Console + developer mode", None),  # handled specially (enable_console module)
-    "devmode": ("Developer/debug mode", None),  # handled specially (enable_devmode module)
-    "skip": ("Force-skip (seen-only)", game_patches.enable_skip),
-    "skipall": ("Force-skip (incl. unseen + transitions)", game_patches.enable_skip_all),
-    "rollback": ("Rollback", game_patches.enable_rollback),
-    "quicksave": ("Quicksave/quickload keybinds", game_patches.enable_quicksave),
-    "quickmenu": ("Quick-menu force-on", game_patches.enable_quickmenu),
-    "nosync": ("Disable save-sync", game_patches.disable_save_sync),
+    "console": ("cli.patch.label.console", None),  # handled specially (enable_console module)
+    "devmode": ("cli.patch.label.devmode", None),  # handled specially (enable_devmode module)
+    "skip": ("cli.patch.label.skip", game_patches.enable_skip),
+    "skipall": ("cli.patch.label.skipall", game_patches.enable_skip_all),
+    "rollback": ("cli.patch.label.rollback", game_patches.enable_rollback),
+    "quicksave": ("cli.patch.label.quicksave", game_patches.enable_quicksave),
+    "quickmenu": ("cli.patch.label.quickmenu", game_patches.enable_quickmenu),
+    "nosync": ("cli.patch.label.nosync", game_patches.disable_save_sync),
 }
 
 
-def _format_patch_text(label: str, patch) -> str:
-    if patch.dry_run:
-        status = "already present, no-op" if patch.already_present else f"would write {patch.target}"
+def _format_patch_text(label_key: str, patch) -> str:
+    label = t(label_key)
+    if patch.already_present:
+        status = t("cli.patch.status.already_present")
+    elif patch.dry_run:
+        status = t("cli.patch.status.would_write", target=patch.target)
     else:
-        status = "already present, no-op" if patch.already_present else f"wrote {patch.target}"
-    return f"{label}: {status}"
+        status = t("cli.patch.status.wrote", target=patch.target)
+    return t("cli.patch.line", label=label, status=status)
 
 
 def cmd_patch_action(args: argparse.Namespace, name: str) -> int:
     action = getattr(args, f"{name}_action", None)
     if action != "enable":
-        ui_output.print_error(
-            f"'{name}' requires a sub-action: `unren {name} enable [PATH]`.", no_color=args.no_color
-        )
+        ui_output.print_error(t("cli.patch.requires_subaction", name=name), no_color=args.no_color)
         return 2
 
     try:
@@ -503,7 +590,7 @@ def cmd_patch_action(args: argparse.Namespace, name: str) -> int:
         if args.json:
             _emit(args, text="", json_data=result.to_dict())
         else:
-            ui_output.print_error(exc.message, no_color=args.no_color)
+            _print_translated_error(exc, no_color=args.no_color)
         return 1
 
     if ctx.game_dir is None:
@@ -516,10 +603,10 @@ def cmd_patch_action(args: argparse.Namespace, name: str) -> int:
         if args.json:
             _emit(args, text="", json_data=result.to_dict())
         else:
-            ui_output.print_error(exc.message, no_color=args.no_color)
+            _print_translated_error(exc, no_color=args.no_color)
         return 1
 
-    label, fn = PATCH_ACTIONS[name]
+    label_key, fn = PATCH_ACTIONS[name]
     try:
         if name == "console":
             report = enable_console.enable(game_dir=ctx.game_dir, dry_run=args.dry_run)
@@ -534,45 +621,46 @@ def cmd_patch_action(args: argparse.Namespace, name: str) -> int:
         if args.json:
             _emit(args, text="", json_data=result.to_dict())
         else:
-            ui_output.print_error(exc.message, no_color=args.no_color)
+            _print_translated_error(exc, no_color=args.no_color)
         return 1
 
     result = Result.success(patch)
     if args.json:
         _emit(args, text="", json_data=result.to_dict())
     elif not args.quiet:
-        print(_format_patch_text(label, patch))
+        ui_output.print_report(_format_patch_text(label_key, patch), no_color=args.no_color)
     return 0
 
 
 def _format_cleanup_text(report) -> str:
     lines = [
-        f"Game root:  {report.game_root}",
-        f"Operation:  {report.operation}",
-        f"Mode:       {'dry-run (no files touched)' if report.dry_run else 'executed'}",
-        f"Files:      {report.total_files}",
+        t("cli.cleanup.game_root", root=report.game_root),
+        t("cli.cleanup.operation", operation=report.operation),
+        t(
+            "cli.cleanup.mode",
+            mode=t("cli.cleanup.mode.dry_run") if report.dry_run else t("cli.cleanup.mode.executed"),
+        ),
+        t("cli.cleanup.files", count=report.total_files),
     ]
     if not report.files:
-        lines.append("Nothing to do (no backups found).")
+        lines.append(t("cli.cleanup.nothing"))
         return "\n".join(lines)
     for f in report.files:
-        verb = "restored" if report.operation == "restore" else "deleted"
+        verb = t("cli.cleanup.status.restored") if report.operation == "restore" else t("cli.cleanup.status.deleted")
         if report.dry_run:
-            verb = f"would be {verb}"
-        status = verb if f.ok else f"FAILED: {f.error}"
-        lines.append(f"  {f.backup_path}  [{status}]")
-    lines.append(f"\nTotal: {report.total_succeeded} succeeded, {report.total_failed} failed.")
+            verb = t("cli.cleanup.status.would_be", verb=verb)
+        status = verb if f.ok else t("cli.cleanup.status.failed", error=f.error)
+        lines.append(t("cli.cleanup.entry", backup_path=f.backup_path, status=status))
+    lines.append(
+        "\n" + t("cli.cleanup.total", succeeded=report.total_succeeded, failed=report.total_failed)
+    )
     return "\n".join(lines)
 
 
 def cmd_cleanup(args: argparse.Namespace) -> int:
     action = getattr(args, "cleanup_action", None)
     if action not in ("restore", "delete"):
-        ui_output.print_error(
-            "'cleanup' requires a sub-action: `unren cleanup restore [PATH]` or "
-            "`unren cleanup delete [PATH] --yes`.",
-            no_color=args.no_color,
-        )
+        ui_output.print_error(t("cli.cleanup.requires_subaction"), no_color=args.no_color)
         return 2
 
     try:
@@ -582,7 +670,7 @@ def cmd_cleanup(args: argparse.Namespace) -> int:
         if args.json:
             _emit(args, text="", json_data=result.to_dict())
         else:
-            ui_output.print_error(exc.message, no_color=args.no_color)
+            _print_translated_error(exc, no_color=args.no_color)
         return 1
 
     try:
@@ -597,14 +685,14 @@ def cmd_cleanup(args: argparse.Namespace) -> int:
         if args.json:
             _emit(args, text="", json_data=result.to_dict())
         else:
-            ui_output.print_error(exc.message, no_color=args.no_color)
+            _print_translated_error(exc, no_color=args.no_color)
         return 1
 
     result = Result.success(report)
     if args.json:
         _emit(args, text="", json_data=result.to_dict())
     elif not args.quiet:
-        print(_format_cleanup_text(report))
+        ui_output.print_report(_format_cleanup_text(report), no_color=args.no_color)
 
     if report.total_files == 0:
         return 0
@@ -612,15 +700,19 @@ def cmd_cleanup(args: argparse.Namespace) -> int:
 
 
 def _format_all_text(report) -> str:
-    lines = [f"Game root:  {report.game_root}", f"Mode:       {'dry-run' if report.dry_run else 'executed'}", ""]
+    lines = [
+        t("cli.all.game_root", root=report.game_root),
+        t("cli.all.mode", mode=t("cli.all.mode.dry_run") if report.dry_run else t("cli.all.mode.executed")),
+        "",
+    ]
     for stage in report.stages:
         if stage.skipped:
-            lines.append(f"  {stage.stage:<20} SKIPPED  ({stage.reason})")
+            lines.append(t("cli.all.stage_skipped", stage=stage.stage, reason=stage.reason))
         elif stage.ok:
-            lines.append(f"  {stage.stage:<20} ok")
+            lines.append(t("cli.all.stage_ok", stage=stage.stage))
         else:
-            lines.append(f"  {stage.stage:<20} FAILED   ({stage.reason})")
-    lines.append(f"\nTotal: {report.total_ok} ok, {report.total_failed} failed.")
+            lines.append(t("cli.all.stage_failed", stage=stage.stage, reason=stage.reason))
+    lines.append("\n" + t("cli.all.total", ok=report.total_ok, failed=report.total_failed))
     return "\n".join(lines)
 
 
@@ -632,7 +724,7 @@ def cmd_all(args: argparse.Namespace) -> int:
         if args.json:
             _emit(args, text="", json_data=result.to_dict())
         else:
-            ui_output.print_error(exc.message, no_color=args.no_color)
+            _print_translated_error(exc, no_color=args.no_color)
         return 1
 
     report = run_all.run_all(ctx=ctx, dry_run=args.dry_run, force=args.force)
@@ -641,7 +733,7 @@ def cmd_all(args: argparse.Namespace) -> int:
     if args.json:
         _emit(args, text="", json_data=result.to_dict())
     elif not args.quiet:
-        print(_format_all_text(report))
+        ui_output.print_report(_format_all_text(report), no_color=args.no_color)
 
     return 1 if report.total_failed > 0 else 0
 
@@ -649,6 +741,10 @@ def cmd_all(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    cfg = _load_config(args)
+    _configure_language(args, cfg)
+    args.no_color = _no_color(args, cfg)
 
     if args.command is None:
         # Bare `unren` (no subcommand) launches the interactive menu

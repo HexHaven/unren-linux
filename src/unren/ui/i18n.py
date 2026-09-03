@@ -45,7 +45,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Mapping
+from typing import Any, Mapping
 
 DEFAULT_LANGUAGE = "en"
 
@@ -153,7 +153,7 @@ def translate(
     translations: Mapping[str, Mapping[str, str]],
     *,
     fallback_language: str = DEFAULT_LANGUAGE,
-    **kwargs: str,
+    **kwargs: Any,
 ) -> str:
     """Resolve ``key`` for ``language`` with English fallback.
 
@@ -215,7 +215,7 @@ def current_language() -> str:
     return str(_state["language"])
 
 
-def t(key: str, **kwargs: str) -> str:
+def t(key: str, **kwargs: Any) -> str:
     """Translate ``key`` into the currently configured language.
 
     Lazily calls :func:`configure` on first use (with no CLI/config
