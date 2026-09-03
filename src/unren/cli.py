@@ -755,20 +755,42 @@ def main(argv: list[str] | None = None) -> int:
 
         return run_interactive()
 
-    if args.command == "detect":
-        return cmd_detect(args)
-    if args.command == "doctor":
-        return cmd_doctor(args)
-    if args.command == "extract":
-        return cmd_extract(args)
-    if args.command == "decompile":
-        return cmd_decompile(args)
-    if args.command in PATCH_ACTIONS:
-        return cmd_patch_action(args, args.command)
-    if args.command == "cleanup":
-        return cmd_cleanup(args)
-    if args.command == "all":
-        return cmd_all(args)
+    try:
+        if args.command == "detect":
+            return cmd_detect(args)
+        if args.command == "doctor":
+            return cmd_doctor(args)
+        if args.command == "extract":
+            return cmd_extract(args)
+        if args.command == "decompile":
+            return cmd_decompile(args)
+        if args.command in PATCH_ACTIONS:
+            return cmd_patch_action(args, args.command)
+        if args.command == "cleanup":
+            return cmd_cleanup(args)
+        if args.command == "all":
+            return cmd_all(args)
+    except OSError as exc:
+        # Milestone 7 (Release Candidate) fix: filesystem-level failures that
+        # aren't already wrapped as a UnrenError (e.g. PermissionError from a
+        # read-only filesystem/mount, or any other OSError raised deep inside
+        # an action while writing/creating files) used to propagate as a raw,
+        # unhandled Python traceback - a silent-fail/crash, violating this
+        # project's own "deterministic error behavior, never a crash" bar
+        # (docs acceptance criteria). Convert it into the same structured
+        # error contract (text/--json, translated, exit code 1) every other
+        # error already uses, instead of letting it escape as a traceback.
+        wrapped = UnrenError(
+            f"Unexpected filesystem error: {exc.strerror or exc}",
+            details={"errno": exc.errno, "filename": exc.filename},
+        )
+        wrapped.code = "filesystem-error"
+        result: Result = Result.failure(wrapped)
+        if getattr(args, "json", False):
+            _emit(args, text="", json_data=result.to_dict())
+        else:
+            _print_translated_error(wrapped, no_color=getattr(args, "no_color", False))
+        return 1
 
     parser.print_help()
     return 2

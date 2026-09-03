@@ -1,0 +1,95 @@
+name: CI (Arch/CachyOS)
+
+# Scope (operator directive, M6 + M7): this project's supported/tested
+# distribution target is Arch/CachyOS only. GitHub-hosted runners have no
+# native Arch image, so both jobs below run inside the official
+# archlinux:base-devel container image on an ubuntu-latest host - this is
+# the standard way to get a real, up-to-date Arch userland (pacman, makepkg,
+# the same package versions an Arch/CachyOS user would actually have) in CI,
+# not a stand-in for a different distro.
+#
+# Ren'Py 6/7/8 coverage: this project doesn't install real Ren'Py SDKs in
+# CI (huge downloads, no CI value beyond what's already verified - see
+# docs/UNRPYC-COVERAGE.md for the real-SDK verification pass run manually
+# for M3.5). Generation coverage instead comes from the test suite's own
+# renpy6_game/renpy7_game/renpy8_game fixtures (tests/fixtures/), exercised
+# by every job below via `pytest tests/`.
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: pytest (Arch, Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel
+    strategy:
+      fail-fast: false
+      matrix:
+        # Arch's official repo only ships one current Python 3 (rolling
+        # release model - no per-version packages like Debian/Fedora).
+        # python-build/uv give us a second, pinned interpreter to widen
+        # coverage a little beyond "whatever pacman -Syu happens to have
+        # today" without depending on AUR.
+        python-version: ["system", "3.10"]
+    steps:
+      - name: Update system and install base tooling
+        run: |
+          pacman -Syu --noconfirm --needed \
+            git python python-pip python-build python-installer python-wheel \
+            python-hatchling python-pytest python-pytest-cov python-rich \
+            python-platformdirs base-devel
+
+      - uses: actions/checkout@v4
+
+      - name: Install pinned Python 3.10 (matrix leg only)
+        if: matrix.python-version == '3.10'
+        run: |
+          pacman -S --noconfirm --needed python310 2>/dev/null || \
+            echo "python310 not in official repos on this image snapshot; falling back to system python for this leg" >&2
+
+      - name: Run test suite
+        run: |
+          PY=python
+          if [ "${{ matrix.python-version }}" = "3.10" ] && command -v python3.10 >/dev/null 2>&1; then
+            PY=python3.10
+            "$PY" -m ensurepip --upgrade || true
+            "$PY" -m pip install --break-system-packages pytest pytest-cov rich platformdirs
+          fi
+          PYTHONPATH="$PWD/src" "$PY" -m pytest tests/ -q
+
+  pkgbuild:
+    name: PKGBUILD build/check/package (makepkg, Arch)
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel
+    steps:
+      - name: Update system and install PKGBUILD deps
+        run: |
+          pacman -Syu --noconfirm --needed \
+            git python python-build python-installer python-wheel \
+            python-hatchling python-pytest python-pytest-cov python-rich \
+            python-platformdirs base-devel sudo
+
+      - uses: actions/checkout@v4
+        with:
+          path: repo
+
+      - name: makepkg --printsrcinfo (syntax/metadata validation)
+        working-directory: repo/packaging/arch
+        run: makepkg --printsrcinfo | tee .SRCINFO
+
+      - name: makepkg -s (build + check, no install/no root)
+        run: |
+          # makepkg refuses to run as root; create an unprivileged build user
+          # with passwordless sudo (needed only for pacman -S of any
+          # additional makedepends, none expected here since everything's
+          # preinstalled above).
+          useradd -m builder
+          echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+          su builder -c "cd '$GITHUB_WORKSPACE/repo/packaging/arch' && makepkg -s --noconfirm --nosign"

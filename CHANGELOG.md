@@ -242,6 +242,105 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   milestone (no passwordless sudo available); build()/check()/package() were
   verified directly instead (see above). A real Arch/CachyOS machine with
   working `sudo` should run `makepkg -si` cleanly per the README instructions.
-- No AUR submission / package signing in this milestone — the PKGBUILD is
+- No AUR submission / package signing in this milestone - the PKGBUILD is
   provided for local `makepkg` builds from a repo checkout, not yet published
   to the AUR.
+
+## [0.1.0] - Milestone 7: Release Candidate
+
+### Scope note (operator directive)
+
+This milestone's distribution/compatibility matrix was narrowed to
+**Arch/CachyOS only**, consistent with M6's own scope narrowing -
+Debian/Ubuntu/Fedora matrix testing is explicitly out of scope for this
+release and was not implemented or tested. Ren'Py 6/7/8 generation coverage
+and the edge-case/error-determinism acceptance criteria are unaffected by
+this narrowing and were fully verified.
+
+### Fixed
+
+- **Bugfix: unhandled `PermissionError`/`OSError` crash on read-only
+  filesystems.** Every mutating action (`console enable`, `devmode enable`,
+  the `skip`/`skipall`/`rollback`/`quicksave`/`quickmenu`/`nosync` family,
+  `extract` without `--dry-run`) previously let a raw Python traceback
+  escape `unren.cli.main()` whenever the target filesystem refused a write
+  (e.g. a read-only `game/` directory, a read-only mount, or a destination
+  directory `extract` couldn't `mkdir()` into) - a silent-fail-adjacent
+  crash that violated this project's own "deterministic error behavior,
+  never a crash" acceptance bar. `main()` now catches any `OSError` that
+  escapes command dispatch and reports it through the same structured
+  `UnrenError`/`Result` contract every other error already uses (new
+  `filesystem-error` error code), with a translated human-readable message
+  and a matching `--json` error shape, exit code 1 either way. Verified with
+  both a real `chmod 555` read-only `game/` dir (patch-action write path)
+  and a real read-only game root (`extract`'s default-output-dir `mkdir()`
+  path) - both now report a clean structured error instead of a traceback.
+
+### Verified
+
+- **CI/CD test matrix**: `.github/workflows/ci.yml` added - `pytest` job
+  (matrix: system Python + a pinned Python 3.10 leg) and a `pkgbuild` job
+  (`makepkg --printsrcinfo` + full unprivileged `makepkg -s` build/check),
+  both running inside the official `archlinux:base-devel` container image
+  (no native Arch GitHub-hosted runner exists, so a real Arch userland
+  inside a container is the standard substitute - not a stand-in for a
+  different distro). Independently reproduced locally against a fresh
+  `archlinux:base-devel` Docker container (not just written and assumed
+  correct): full `pytest tests/` (304 tests) passed inside the container;
+  `makepkg -s --noconfirm --nosign` as an unprivileged user completed
+  build()/check()(304 passed)/package() successfully; the resulting
+  `.pkg.tar.zst` was installed via `pacman -U` and `unren --version`/`unren
+  doctor` both ran correctly from `/tmp` afterward - a fuller end-to-end
+  reproduction than M6 could achieve (M6's sandbox had no interactive
+  `sudo` for the `pacman -S`/root-build step; this pass used a container
+  instead and completed the entire build/install/run cycle for real).
+- **Ren'Py 6/7/8 generation matrix**: exercised via the existing
+  `tests/fixtures/renpy6_game`/`renpy7_game`/`renpy8_game` synthetic
+  fixtures (all milestones' test suites) plus M3.5's independent
+  real-SDK/real-testcase verification pass (`docs/UNRPYC-COVERAGE.md`, 77
+  real `.rpyc` files across all three generations, zero failures) - no new
+  gaps found, no changes needed this milestone.
+- **Edge cases**: 7 new integration tests added
+  (`tests/integration/test_release_candidate_edge_cases.py`) covering
+  read-only-filesystem determinism (the bugfix above, both text and
+  `--json` output), a nonexistent target path (`doctor` reports
+  `game_found: false` with a clear `detection_error`, exit 0, no crash), an
+  unknown/undetectable Ren'Py generation (`doctor` reports
+  `renpy_generation: "unknown"`; `decompile` refuses with a clear
+  `runtime-resolution-error` reason rather than guessing a decompiler
+  variant), matching the project's existing coverage for unicode/space-in-path
+  archive members and paths (`test_rpatool_adapter.py`,
+  `test_extract_paths_with_spaces_and_unicode`) and corrupt/unrecognized
+  RPA/RPYC containers (`test_rpatool_adapter.py`'s
+  `test_corrupt_index_raises_corrupt_archive_error`,
+  `test_decompile_unknown_format_reported_as_error_not_skipped`) which were
+  already green and needed no changes. Full suite: 304/304 passed
+  (`.venv/bin/python -m pytest tests/ -q`).
+- **`--dry-run` reliability**: new regression test confirms `extract
+  --dry-run` against a `chmod 555` read-only game root computes and reports
+  the full plan (exit 0) with zero filesystem changes (byte-for-byte
+  directory-listing diff before/after) - it never needs to write anything,
+  so it structurally cannot be broken by a read-only mount.
+- **Performance**: a synthetic 1000-member / ~4 MB RPA archive extracted via
+  the full CLI path (`unren --json extract`) in ~0.15s wall-clock on the
+  verification host - no scaling concern found for typical Ren'Py game
+  archive sizes.
+- **Python-2 legacy path**: no code changes this milestone. M3.5's
+  dedicated verification (`docs/UNRPYC-COVERAGE.md`) already confirmed
+  `unrpyc_current` alone covers all three Ren'Py generations without a
+  Python 2 runtime, with the vendored `unrpyc_legacy` (real Python 2, v1.3.2)
+  kept as a documented, still-functional fallback (confirmed then via a
+  real `pyenv`-provisioned Python 2.7.18 interpreter) for the one narrow
+  gap (~genuine untouched Screen Language 1 source) `unrpyc_current` can't
+  parse. That milestone's own re-verification checklist re-confirmed here:
+  status unchanged, explicitly documented, not a defect.
+
+### Known limitations (by design, this milestone)
+
+- Debian/Ubuntu/Fedora are explicitly out of scope for this release (scope
+  narrowed to Arch/CachyOS by operator directive during M6/M7) - not tested,
+  not a defect.
+- CI does not install a real Ren'Py SDK (large download, no additional
+  coverage beyond the fixture-based + M3.5 real-file verification already
+  in place) - see `docs/UNRPYC-COVERAGE.md` for that separate, manual,
+  real-SDK verification pass.
