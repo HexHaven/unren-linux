@@ -27,6 +27,13 @@ Detection/diagnostics (Milestone 1), RPA archive **extraction** (Milestone 2), R
 **decompilation** (Milestone 3), and the primary game-patching actions plus backup
 cleanup and a bulk `all` command (Milestone 4) are implemented.
 
+Milestone 3.5 (verification-only, no code changes) confirmed against 77 real,
+independently-sourced `.rpyc` files spanning Ren'Py 6.18.3/7.7/8.2 that the vendored
+`unrpyc_current` (v2.0.3, Python 3.9+) alone fully covers RPYC decompilation for this
+project's target versions; the vendored `unrpyc_legacy` (v1.3.2, Python 2) is kept as
+a documented fallback for SL1-screen edge cases, not required for correctness. See
+`docs/UNRPYC-COVERAGE.md`.
+
 Currently available:
 
 - `unren detect [PATH]` — detect whether `PATH` (default: cwd) is a Ren'Py game, and report
