@@ -21,13 +21,15 @@ import sys
 from pathlib import Path
 
 from unren import __version__
+from unren.actions import extract_rpa
 from unren.core.config import UnrenConfig, find_config
 from unren.core.errors import UnrenError
 from unren.core.result import Result
 from unren.detection import game as game_detect
+from unren.detection.archives import ArchiveInfo
 from unren.ui import output as ui_output
 
-NOT_YET_IMPLEMENTED = ("extract", "decompile", "console", "devmode", "all")
+NOT_YET_IMPLEMENTED = ("decompile", "console", "devmode", "all")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -84,6 +86,23 @@ def build_parser() -> argparse.ArgumentParser:
         "doctor", help="Run environment/tooling diagnostics.", parents=[sub_global_opts]
     )
     doctor_p.add_argument("path", nargs="?", default=".", help="Path to probe for a game (default: cwd).")
+
+    extract_p = subparsers.add_parser(
+        "extract", help="Extract RPA archives from a game.", parents=[sub_global_opts]
+    )
+    extract_p.add_argument("path", nargs="?", default=".", help="Path to the game directory.")
+    extract_p.add_argument(
+        "--in-place",
+        action="store_true",
+        default=False,
+        help="Extract into the game's own game/ directory instead of a separate unren-extracted/ folder.",
+    )
+    extract_p.add_argument(
+        "--force",
+        action="store_true",
+        default=False,
+        help="Overwrite existing destination files (backs them up first under .unren/backups/).",
+    )
 
     for name in NOT_YET_IMPLEMENTED:
         stub_p = subparsers.add_parser(
@@ -218,6 +237,91 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     return 0
 
 
+def _format_extract_text(report: extract_rpa.ExtractionReport) -> str:
+    lines = [
+        f"Game root:       {report.game_root}",
+        f"Output:          {report.output_root}"
+        + (" (in-place)" if report.in_place else ""),
+        f"Mode:            {'dry-run (no files written)' if report.dry_run else 'extracted'}",
+        f"Archives found:  {report.total_archives}",
+    ]
+    if not report.archives:
+        lines.append("No RPA archives found.")
+        return "\n".join(lines)
+
+    for plan in report.archives:
+        lines.append(f"\n{plan.archive}  [{plan.format}]")
+        if not plan.ok:
+            lines.append(f"  skipped: {plan.skipped_reason}")
+            continue
+        if report.dry_run:
+            lines.append(f"  would extract {len(plan.members)} file(s) to {plan.output_dir}")
+            if plan.conflicts:
+                lines.append(
+                    f"  WARNING: {len(plan.conflicts)} destination file(s) already exist "
+                    "(would require --force)"
+                )
+        else:
+            lines.append(f"  extracted {plan.extracted}/{len(plan.members)} file(s) to {plan.output_dir}")
+
+    lines.append(
+        f"\nTotal: {report.total_extracted_files} file(s) extracted, "
+        f"{report.total_failed} archive(s) failed/skipped."
+    )
+    return "\n".join(lines)
+
+
+def cmd_extract(args: argparse.Namespace) -> int:
+    try:
+        ctx = game_detect.detect_game(args.path)
+    except UnrenError as exc:
+        result: Result = Result.failure(exc)
+        if args.json:
+            _emit(args, text="", json_data=result.to_dict())
+        else:
+            ui_output.print_error(exc.message, no_color=args.no_color)
+        return 1
+
+    # NOTE: for `extract`, --output means "extraction destination directory"
+    # per this milestone's acceptance criteria (`unren extract --output
+    # /tmp/out /game` uses /tmp/out), which shadows the *global* --output
+    # flag's usual meaning ("write report text to this file instead of
+    # stdout", see _emit()). This is a deliberate, scoped reinterpretation of
+    # the flag for this one subcommand - documented here since it deviates
+    # from the shared global-options contract. Report text/JSON is therefore
+    # always printed to stdout for `extract`, never redirected to a file.
+    try:
+        report = extract_rpa.extract(
+            game_root=ctx.root,
+            game_dir=ctx.game_dir,
+            output=args.output,
+            in_place=args.in_place,
+            dry_run=args.dry_run,
+            force=args.force,
+            archives=[
+                ArchiveInfo(path=a.path, extension=a.extension, format=a.format)
+                for a in ctx.archives
+            ],
+        )
+    except UnrenError as exc:
+        result = Result.failure(exc)
+        if args.json:
+            print(__import__("json").dumps(result.to_dict(), indent=2))
+        else:
+            ui_output.print_error(exc.message, no_color=args.no_color)
+        return 1
+
+    result = Result.success(report)
+    if args.json:
+        print(__import__("json").dumps(result.to_dict(), indent=2, sort_keys=False))
+    elif not args.quiet:
+        print(_format_extract_text(report))
+
+    if report.total_archives == 0:
+        return 0
+    return 1 if report.total_failed == report.total_archives else 0
+
+
 def cmd_stub(args: argparse.Namespace, name: str) -> int:
     message = (
         f"'{name}' is not yet implemented in this milestone (Linux Core Skeleton). "
@@ -247,6 +351,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_detect(args)
     if args.command == "doctor":
         return cmd_doctor(args)
+    if args.command == "extract":
+        return cmd_extract(args)
     if args.command in NOT_YET_IMPLEMENTED:
         return cmd_stub(args, args.command)
 

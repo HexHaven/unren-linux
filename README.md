@@ -21,11 +21,11 @@ its original author(s). See [`LICENSE`](./LICENSE) for the full license text.
 This is an independent, unofficial port — not affiliated with or endorsed by the upstream
 project maintainers.
 
-## Status: Milestone 1 — Linux Core Skeleton
+## Status: Milestone 2 — RPA Extraction
 
-This is an early-stage release. **Only detection and diagnostics are implemented.** No
-extraction, decompilation, or game-patching actions exist yet — those land in later
-milestones (M2+).
+Detection/diagnostics (Milestone 1) plus RPA archive **extraction** are implemented.
+Decompilation and game-patching actions are not yet available — those land in later
+milestones (M3+).
 
 Currently available:
 
@@ -34,11 +34,20 @@ Currently available:
 - `unren doctor [PATH]` — environment/tooling diagnostics: OS info, game detection result,
   Python runtime, archive formats present, and availability of external tools (`7z`,
   `p7zip`, `git`).
-- Both commands support `--json` for machine-readable output.
+- `unren extract [PATH]` — extract RPA archives (v1/.rpi, v2, v3, v3.2) found under `PATH`.
+  Defaults to a separate `unren-extracted/` folder next to the game root (never touches the
+  original `.rpa` files or the `game/` tree unless `--in-place` is explicitly given).
+  `--output PATH` extracts into an arbitrary destination instead. `--dry-run` (global flag)
+  computes and prints the full plan without writing anything. Existing destination files are
+  never silently overwritten — re-run with `--force` to overwrite (existing files are backed
+  up first under `<game_root>/.unren/backups/`). Formats not yet supported for extraction
+  (RPAN-3.0/ZiX-12A/12B/SVAC-1.0/RWA-3.0 "neutron" archives) are reported per-archive rather
+  than guessed at.
+- All commands support `--json` for machine-readable output.
 
-All other subcommands (`extract`, `decompile`, `console`, `devmode`, `all`) are registered
-in the CLI but are stubs that print "not yet implemented" and exit non-zero — they are read
-so `unren --help` documents the intended full surface, but do nothing destructive.
+`decompile`, `console`, `devmode`, `all` subcommands are registered in the CLI but are stubs
+that print "not yet implemented" and exit non-zero — they are listed so `unren --help`
+documents the intended full surface, but do nothing destructive.
 
 Detection is **read-only** and **fail-closed**: if the Ren'Py generation/version cannot be
 positively established via any of the seven detection strategies, it is reported as

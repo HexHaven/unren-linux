@@ -121,7 +121,7 @@ def test_doctor_text_smoke(tmp_path: Path) -> None:
 
 
 def test_stub_subcommand_reports_not_implemented(renpy8_game: Path) -> None:
-    proc = _run_unren("extract", str(renpy8_game))
+    proc = _run_unren("decompile", str(renpy8_game))
     assert proc.returncode == 3
     assert "not yet implemented" in (proc.stdout + proc.stderr)
 
@@ -130,3 +130,92 @@ def test_bare_invocation_prints_help_and_exits_3() -> None:
     proc = _run_unren()
     assert proc.returncode == 3
     assert "usage" in (proc.stdout + proc.stderr).lower()
+
+
+def _build_rpa_game(tmp_path: Path, *, version: str = "RPA-3.0") -> Path:
+    from tests.helpers.rpa_builder import build_archive
+
+    game_root = tmp_path / "TestGame"
+    game_dir = game_root / "game"
+    game_dir.mkdir(parents=True)
+    (game_root / "renpy").mkdir()
+    (game_root / "renpy" / "version.py").write_text('version = "8.1.0"\n')
+    build_archive(game_dir / "archive.rpa", {"script.rpyc": b"payload data"}, version=version)
+    return game_root
+
+
+def test_extract_creates_default_output_dir(tmp_path: Path) -> None:
+    game_root = _build_rpa_game(tmp_path)
+    proc = _run_unren("extract", str(game_root))
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    out_file = game_root / "unren-extracted" / "script.rpyc"
+    assert out_file.read_bytes() == b"payload data"
+
+
+def test_extract_custom_output_flag(tmp_path: Path) -> None:
+    game_root = _build_rpa_game(tmp_path)
+    custom_out = tmp_path / "custom" / "out"
+    proc = _run_unren("extract", "--output", str(custom_out), str(game_root))
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert (custom_out / "script.rpyc").read_bytes() == b"payload data"
+    assert not (game_root / "unren-extracted").exists()
+
+
+def test_extract_dry_run_makes_no_changes(tmp_path: Path) -> None:
+    game_root = _build_rpa_game(tmp_path)
+    proc = _run_unren("--dry-run", "extract", str(game_root))
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "dry-run" in proc.stdout.lower() or "would extract" in proc.stdout.lower()
+    assert not (game_root / "unren-extracted").exists()
+
+
+def test_extract_json_output(tmp_path: Path) -> None:
+    game_root = _build_rpa_game(tmp_path)
+    proc = _run_unren("--json", "extract", str(game_root))
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    data = json.loads(proc.stdout)
+    assert data["ok"] is True
+    assert data["value"]["archives"]
+    assert data["value"]["archives"][0]["extracted"] == 1
+
+
+def test_extract_no_overwrite_without_force(tmp_path: Path) -> None:
+    game_root = _build_rpa_game(tmp_path)
+    out_dir = game_root / "unren-extracted"
+    out_dir.mkdir()
+    (out_dir / "script.rpyc").write_text("pre-existing, must survive")
+
+    proc = _run_unren("extract", str(game_root))
+    assert proc.returncode != 0
+    assert (out_dir / "script.rpyc").read_text() == "pre-existing, must survive"
+
+
+def test_extract_in_place_flag(tmp_path: Path) -> None:
+    game_root = _build_rpa_game(tmp_path)
+    proc = _run_unren("extract", "--in-place", str(game_root))
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert (game_root / "game" / "script.rpyc").read_bytes() == b"payload data"
+    assert not (game_root / "unren-extracted").exists()
+
+
+def test_extract_rpa_v2_and_v3_fixtures(tmp_path: Path) -> None:
+    for version in ("RPA-2.0", "RPA-3.0"):
+        game_root = _build_rpa_game(tmp_path / version, version=version)
+        proc = _run_unren("extract", str(game_root))
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert (game_root / "unren-extracted" / "script.rpyc").read_bytes() == b"payload data"
+
+
+def test_extract_paths_with_spaces_and_unicode(tmp_path: Path) -> None:
+    game_root = _build_rpa_game(tmp_path / "gäme with spaces")
+    proc = _run_unren("extract", str(game_root))
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert (game_root / "unren-extracted" / "script.rpyc").read_bytes() == b"payload data"
+
+
+def test_extract_no_archives_found(tmp_path: Path) -> None:
+    game_root = tmp_path / "EmptyGame"
+    (game_root / "game").mkdir(parents=True)
+    proc = _run_unren("extract", str(game_root))
+    assert proc.returncode == 0
+    assert "No RPA archives found" in proc.stdout

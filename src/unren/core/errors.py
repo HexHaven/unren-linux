@@ -44,3 +44,15 @@ class UnsupportedOperationError(UnrenError):
 
 class RuntimeResolutionError(UnrenError):
     code = "runtime-resolution-error"
+
+
+class OutputPathError(UnrenError):
+    """Output/destination path is unusable (exists as wrong type, not writable, ...)."""
+
+    code = "output-path-error"
+
+
+class OverwriteProtectionError(UnrenError):
+    """A mutating action refused to overwrite existing destination file(s)."""
+
+    code = "overwrite-protection"
