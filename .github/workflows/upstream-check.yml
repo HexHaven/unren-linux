@@ -1,0 +1,92 @@
+name: Upstream tracking check
+
+# Milestone 8: weekly check of Lurmel/UnRen-forall (the upstream Windows
+# batch-script project this repo ports to Linux) for new commits/releases.
+# Never merges upstream code automatically -- only files a tracking issue
+# so a human can do the compatibility review. See docs/UPSTREAM.md.
+#
+# Platform note (operator directive, Arch/CachyOS-only project scope): this
+# workflow does no distro-specific work at all (pure Python stdlib +
+# `gh` CLI, both provided by the standard ubuntu-latest runner image), so
+# there is nothing here to restrict to Arch/CachyOS -- it only talks to the
+# GitHub API, not to any target-system package manager.
+
+on:
+  schedule:
+    # Every Monday at 06:00 UTC.
+    - cron: "0 6 * * 1"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: upstream-check
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: Check upstream for changes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ensure upstream-update label exists
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh label create upstream-update \
+            --repo "${{ github.repository }}" \
+            --color FBCA04 \
+            --description "Upstream Lurmel/UnRen-forall changed; needs compatibility review" \
+            --force
+
+      - name: Run upstream check
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 .github/scripts/upstream_check.py
+
+      - name: Check for an already-open tracking issue
+        id: existing
+        if: steps.check.outputs.has_update == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          count=$(gh issue list --repo "${{ github.repository }}" \
+            --label upstream-update --state open --json number --jq 'length')
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+
+      - name: Create tracking issue
+        id: create_issue
+        if: steps.check.outputs.has_update == 'true' && steps.existing.outputs.count == '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue create --repo "${{ github.repository }}" \
+            --title "${{ steps.check.outputs.issue_title }}" \
+            --body-file upstream-issue-body.md \
+            --label upstream-update
+
+      - name: Skip issue creation (already open)
+        if: steps.check.outputs.has_update == 'true' && steps.existing.outputs.count != '0'
+        run: |
+          echo "::notice::An upstream-update issue is already open; not filing a duplicate. It will be re-checked next run."
+
+      - name: Finalize tracked state after successful issue creation
+        if: steps.check.outputs.has_update == 'true' && steps.existing.outputs.count == '0'
+        run: python3 .github/scripts/upstream_check.py --finalize
+
+      - name: Commit updated state file
+        if: steps.check.outputs.state_changed == 'true' || steps.create_issue.outcome == 'success'
+        run: |
+          if git diff --quiet -- .github/upstream-state.json; then
+            echo "No state change to commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .github/upstream-state.json
+          git commit -m "chore: update upstream tracking state [skip ci]"
+          git push
