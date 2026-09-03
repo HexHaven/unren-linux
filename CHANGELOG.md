@@ -183,3 +183,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Milestone 5).
 - Context-menu registry integration and self-update remain explicit
   non-goals on Linux (`docs/UPSTREAM-BEHAVIOR.md` §3).
+
+## [Unreleased] - Milestone 6: Packaging
+
+### Added
+
+- `pyproject.toml` `[project.scripts]` entry point (`unren = "unren.cli:main"`)
+  already present from Milestone 1 verified end-to-end as the packaging
+  target for this milestone: confirmed working via `pipx install <repo>` and
+  a `uv pip install`-into-isolated-venv equivalent of `uv tool install
+  <repo>` (both produce a global `unren` command with no repo-checkout
+  dependency at runtime; `unren --version`/`unren doctor` run correctly from
+  an unrelated directory such as `/tmp`).
+- `packaging/arch/PKGBUILD`: Arch/CachyOS pacman package definition. Builds
+  the wheel via `python -m build` (`makedepends`: `python-build`,
+  `python-installer`, `python-wheel`, `python-hatchling`), runs the full
+  pytest suite as `check()` (`checkdepends`: `python-pytest`,
+  `python-pytest-cov`) with `PYTHONPATH` pointed at `src/` (the package isn't
+  installed yet at check-time), and installs the built wheel via `python -m
+  installer --destdir` in `package()`. Declares `depends=(python
+  python-rich python-platformdirs)` (matches this project's `ui`/`paths`
+  extras, which are runtime-required for the full experience rather than
+  optional on Arch) and `optdepends` for `7zip`/`git` (surfaced by `unren
+  doctor`) and AUR-only `python2` (legacy unrpyc variant fallback).
+  Builds directly from the local repo checkout (`source=()` is empty,
+  `_repo_root="$startdir/../.."`) rather than a tagged release tarball, since
+  this project does not yet publish signed upstream release archives.
+- README: Arch/CachyOS `makepkg -si` install instructions alongside the
+  existing `pipx`/`uv tool` section; expanded status/roadmap notes for
+  Milestones 5-6.
+
+### Verified
+
+- `uv build` produces a wheel whose `RECORD`/`entry_points.txt` matches the
+  declared `[project.scripts]` entry point; `pipx install /path/to/repo`
+  installs cleanly and `unren --version`/`unren doctor` (run from `/tmp`,
+  no repo access) both succeed.
+- `packaging/arch/PKGBUILD` produces a valid `.SRCINFO` (`makepkg
+  --printsrcinfo`); its `build()`/`check()`/`package()` steps were
+  independently reproduced against a venv provisioned with the exact
+  package set Arch's `pacman` would install for this PKGBUILD's
+  `depends`/`makedepends`/`checkdepends` (the execution sandbox used to build
+  this milestone has no interactive `sudo`, so `makepkg -si`'s own `pacman
+  -S` dependency-install step could not be run end-to-end here; the
+  equivalent pip-based dependency set was verified to produce the same
+  build/check/package outcomes instead). Full test suite (297 tests) passes
+  in this reproduction.
+- Scope note: this milestone's distribution target was narrowed to
+  Arch/CachyOS only (operator directive during execution) — Debian/Ubuntu/
+  Fedora packaging is explicitly out of scope and was not implemented or
+  tested.
+
+### Known limitations (by design, this milestone)
+
+- `makepkg -si`'s dependency-installation step (`pacman -S` for
+  `makedepends`/`checkdepends`) requires interactive `sudo` and was not
+  exercised end-to-end in the execution environment used to build this
+  milestone (no passwordless sudo available); build()/check()/package() were
+  verified directly instead (see above). A real Arch/CachyOS machine with
+  working `sudo` should run `makepkg -si` cleanly per the README instructions.
+- No AUR submission / package signing in this milestone — the PKGBUILD is
+  provided for local `makepkg` builds from a repo checkout, not yet published
+  to the AUR.

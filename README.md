@@ -21,11 +21,13 @@ its original author(s). See [`LICENSE`](./LICENSE) for the full license text.
 This is an independent, unofficial port — not affiliated with or endorsed by the upstream
 project maintainers.
 
-## Status: Milestone 4 — Remaining UnRen Features
+## Status: Milestone 6 — Packaging
 
 Detection/diagnostics (Milestone 1), RPA archive **extraction** (Milestone 2), RPYC
-**decompilation** (Milestone 3), and the primary game-patching actions plus backup
-cleanup and a bulk `all` command (Milestone 4) are implemented.
+**decompilation** (Milestone 3), the primary game-patching actions plus backup
+cleanup and a bulk `all` command (Milestone 4), the interactive menu +
+internationalization (Milestone 5), and `pipx`/`uv tool`/Arch `PKGBUILD`
+packaging (Milestone 6) are implemented.
 
 Milestone 3.5 (verification-only, no code changes) confirmed against 77 real,
 independently-sourced `.rpyc` files spanning Ren'Py 6.18.3/7.7/8.2 that the vendored
@@ -113,6 +115,31 @@ uv tool install /path/to/unren-forall-linux
 # or
 pipx install /path/to/unren-forall-linux
 ```
+
+Either installs an isolated `unren` command onto your `PATH` (`uv tool ensurepath`
+/ `pipx ensurepath` if it isn't already) — no virtualenv activation or repo
+checkout needed afterwards. `unren --version` and `unren doctor` work from any
+directory once installed.
+
+### On Arch Linux / CachyOS, with the bundled PKGBUILD
+
+A `PKGBUILD` is provided at `packaging/arch/PKGBUILD` for building a native
+pacman package from a local checkout of this repository:
+
+```bash
+cd /path/to/unren-forall-linux/packaging/arch
+makepkg -si
+```
+
+`-s` resolves and installs build/check dependencies (`python-build`,
+`python-installer`, `python-hatchling`, `python-pytest`, `python-pytest-cov`)
+via `pacman` (will prompt for your password); `-i` installs the resulting
+package after building. This also runs the full test suite as part of the
+build (`check()`) — the package build fails if any test fails. Runtime
+dependencies (`python`, `python-rich`, `python-platformdirs`) are declared in
+the `PKGBUILD` and pulled in automatically by pacman. After installation,
+`unren` is on `PATH` for every user, with no reference to the build checkout
+required (`unren doctor` works from any directory, e.g. `/tmp`).
 
 Optional extras:
 
