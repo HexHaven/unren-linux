@@ -583,3 +583,112 @@ def test_every_interactive_menu_action_has_an_equivalent_direct_cli_command() ->
         argv = action.build_argv(_ctx())
         assert argv is not None
         assert argv[0] in valid_commands, f"menu action {action.key!r} has no matching CLI command {argv[0]!r}"
+
+
+# --- Milestone 5 (t_eeb9e827): remaining integration gap-fill ---------------
+#
+# The sibling tasks (t_05d22242, t_10ab2c0e) already added: --language
+# forcing German via subprocess, --no-color/color ANSI checks, and a
+# *structural* menu-vs-CLI parity guard (every menu action's argv[0] is a
+# real subcommand name). What's still missing at the integration level:
+#   1. Language selection via the *env var* path (not the --language flag)
+#      exercised through a real subprocess - only unit-tested against the
+#      pure detect_language() function so far.
+#   2. A *behavioral* (not just structural) menu-vs-CLI parity check: that
+#      driving an action through the real interactive menu with simulated
+#      stdin produces the same report text / same on-disk outcome as
+#      invoking the equivalent `unren [COMMAND]` directly - true outcome
+#      equivalence, not just "the command name is recognized".
+
+
+def test_language_env_var_forces_german_end_to_end(tmp_path: Path) -> None:
+    # UNREN_LANGUAGE (not --language) driving a real subprocess end-to-end.
+    proc = _run_unren("doctor", str(tmp_path), env={"UNREN_LANGUAGE": "de"})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Spiel gefunden:" in proc.stdout
+    assert "Game found:" not in proc.stdout
+
+
+def test_language_env_var_lc_lang_fallback_forces_german_end_to_end(tmp_path: Path) -> None:
+    # LC_LANG is the documented POSIX-style fallback behind UNREN_LANGUAGE.
+    proc = _run_unren(
+        "doctor", str(tmp_path), env={"UNREN_LANGUAGE": "", "LC_LANG": "de_DE.UTF-8"}
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Spiel gefunden:" in proc.stdout
+
+
+def test_language_env_var_forces_german_interactive_menu() -> None:
+    # Same env-var precedence path, but through the bare (menu) invocation
+    # rather than a subcommand - the menu must be translated too.
+    proc = _run_unren(input="q\n", env={"UNREN_LANGUAGE": "de"})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Auf Wiedersehen" in proc.stdout
+    assert "Goodbye" not in proc.stdout
+
+
+def test_menu_detect_action_produces_same_report_text_as_direct_cli_detect(
+    renpy6_game: Path,
+) -> None:
+    """True outcome-equivalence: the interactive menu's 'detect' action must
+    print the exact same game-detection report text a direct `unren detect
+    PATH` invocation would - not merely dispatch to a recognized command
+    name. Both paths call the identical unren.cli.main(["detect", path])
+    code inside the same process (ui/interactive.py is a pure dispatcher),
+    so the report text emitted must match line-for-line."""
+    from unren.ui import interactive
+
+    direct = _run_unren("detect", str(renpy6_game))
+    assert direct.returncode == 0, direct.stdout + direct.stderr
+
+    idx = [a.key for a in interactive.ACTIONS].index("detect") + 1
+    # select detect, supply the game path, press-enter past the pause, quit.
+    menu_input = f"{idx}\n{renpy6_game}\n\nq\n"
+    via_menu = _run_unren(input=menu_input)
+    assert via_menu.returncode == 0, via_menu.stdout + via_menu.stderr
+
+    for line in direct.stdout.strip().splitlines():
+        assert line in via_menu.stdout, (
+            f"direct CLI report line {line!r} missing from menu-driven output"
+        )
+
+
+def test_unsupported_language_falls_back_to_english_end_to_end(tmp_path: Path) -> None:
+    # "fr" has no locale file at all (only en/de are shipped). The whole
+    # process must fall back to English text everywhere, never raise, and
+    # never print a raw translation key like "cli.doctor.game_found".
+    proc = _run_unren("--language", "fr", "doctor", str(tmp_path))
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Game found:" in proc.stdout
+    assert "cli.doctor.game_found" not in proc.stdout
+    assert "cli." not in proc.stdout.replace("cli.py", "")  # no leaked raw keys
+
+
+def test_unsupported_language_falls_back_to_english_for_errors() -> None:
+    proc = _run_unren("--language", "fr", "detect", "/definitely/does/not/exist/anywhere")
+    assert proc.returncode == 1
+    combined = proc.stdout + proc.stderr
+    assert "Path not found" in combined
+    assert "error.path_not_found" not in combined
+
+
+def test_menu_console_enable_action_writes_same_marker_as_direct_cli(tmp_path: Path) -> None:
+    """Outcome equivalence for a mutating action: menu-driven 'console
+    enable' must write the exact same marker file/content a direct
+    `unren console enable PATH` invocation would."""
+    from unren.ui import interactive
+
+    direct_root = _build_patch_game(tmp_path / "direct")
+    direct = _run_unren("console", "enable", str(direct_root))
+    assert direct.returncode == 0, direct.stdout + direct.stderr
+    direct_marker = direct_root / "game" / "unren-console.rpy"
+    assert direct_marker.is_file()
+
+    menu_root = _build_patch_game(tmp_path / "via-menu")
+    idx = [a.key for a in interactive.ACTIONS].index("console") + 1
+    menu_input = f"{idx}\n{menu_root}\n\nq\n"
+    via_menu = _run_unren(input=menu_input)
+    assert via_menu.returncode == 0, via_menu.stdout + via_menu.stderr
+    menu_marker = menu_root / "game" / "unren-console.rpy"
+    assert menu_marker.is_file()
+    assert menu_marker.read_text() == direct_marker.read_text()
