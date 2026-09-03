@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 (pre-1.0: minor versions may include breaking changes).
 
+## [Unreleased]
+
+### Added
+
+- `packaging/arch/PKGBUILD`: `pkgver()` function derives a deterministic, unique
+  dev version from git state on every `makepkg`/`make install` run, so
+  consecutive local builds never collide with an already-installed version.
+  Uses `git describe --tags --long` when release tags exist (standard Arch VCS
+  package idiom, e.g. `v0.1.0.r5.gabc1234`); falls back to
+  `<pyproject-version>.r<commit-count>.g<short-hash>` while the repo has no
+  tags yet. Added `git` to `makedepends` accordingly. Once the project starts
+  publishing tagged AUR releases, this will be replaced by a fixed `pkgver`
+  pinned to `pyproject.toml`.
+
 ## [0.1.0] - Milestone 1: Linux Core Skeleton
 
 ### Added

@@ -25,6 +25,7 @@ makedepends=(
   'python-installer'
   'python-wheel'
   'python-hatchling'
+  'git'
 )
 checkdepends=(
   'python-pytest'
@@ -40,6 +41,31 @@ sha256sums=()
 
 # Repo root: this PKGBUILD lives at <repo>/packaging/arch/PKGBUILD.
 _repo_root="$startdir/../.."
+
+# Dev-workflow versioning: derive a deterministic, unique pkgver from git
+# state so `makepkg`/`make install` never collides with an already-installed
+# build ("already installed" no-ops) and developers never hand-edit pkgver.
+#
+# - If the repo has release tags: <tag>.r<commits-since-tag>.g<hash>
+#   (standard Arch VCS-package idiom; see `git describe --tags --long`).
+# - Otherwise (current state - no tags yet): <pyproject-version>.r<total-commits>.g<hash>
+#   so every new commit still yields a distinct, deterministic pkgver.
+# pkgver() output must only contain alphanumerics, dots and underscores
+# (makepkg rejects hyphens/colons), hence the dot-separated format.
+#
+# Release-workflow note: once this project starts publishing tagged/pinned
+# releases to AUR, drop this pkgver() and pin pkgver directly to the
+# pyproject.toml version instead.
+pkgver() {
+  cd "$_repo_root"
+  if git describe --tags --long &>/dev/null; then
+    git describe --tags --long | sed 's/^v//; s/-/.r/; s/-/./'
+  else
+    local _base
+    _base=$(grep -m1 -Po '(?<=^version = ")[^"]+' pyproject.toml)
+    printf '%s.r%s.g%s' "$_base" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+  fi
+}
 
 build() {
   cd "$_repo_root"
