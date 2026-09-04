@@ -1,4 +1,4 @@
-# Maintainer: xNyxion <core@nyxion.cloud>
+# Maintainer: HexHaven <HexHaven@nyxion.cloud>
 #
 # Builds directly from the enclosing project checkout (this PKGBUILD lives at
 # packaging/arch/PKGBUILD inside the repo it packages) rather than from a
