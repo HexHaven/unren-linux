@@ -135,7 +135,7 @@ def run_all(*, ctx: GameContext, dry_run: bool = False, force: bool = False) -> 
                 generation=ctx.renpy_version.generation,
                 dry_run=dry_run,
                 force=force,
-                rpyc_files=find_rpyc_files(ctx.root),
+                rpyc_files=find_rpyc_files(ctx.game_dir or ctx.root),
             )
             ok = (
                 decompile_report.total_files == 0

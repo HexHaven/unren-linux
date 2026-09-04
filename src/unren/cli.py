@@ -533,7 +533,7 @@ def cmd_decompile(args: argparse.Namespace) -> int:
             dry_run=args.dry_run,
             force=args.force,
             try_harder=args.try_harder,
-            rpyc_files=find_rpyc_files(ctx.root),
+            rpyc_files=find_rpyc_files(ctx.game_dir or ctx.root),
         )
     except UnrenError as exc:
         result = Result.failure(exc)

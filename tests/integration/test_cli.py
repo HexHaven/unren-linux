@@ -409,6 +409,42 @@ def test_decompile_unknown_format_reported_as_error_not_skipped(tmp_path: Path) 
     assert good_entry["skipped_reason"] is None
 
 
+def test_decompile_finds_only_game_rpyc_not_renpy_engine_files(tmp_path: Path) -> None:
+    # Regression test: a real Ren'Py install root ships .rpyc files under
+    # renpy/ (engine bytecode) and lib/ (bundled interpreter/libs) in
+    # addition to the actual game/ tree. `decompile` must scope its search
+    # to game/ only - it must never surface, let alone attempt to
+    # decompile, Ren'Py's own engine-internal .rpyc files.
+    game_root = tmp_path / "RealGame"
+    game_dir = game_root / "game"
+    game_dir.mkdir(parents=True)
+    (game_root / "renpy").mkdir()
+    (game_root / "renpy" / "version.py").write_text('version = "8.1.0"\n')
+    (game_root / "renpy" / "common").mkdir()
+    # Engine-internal .rpyc files that must be excluded from the scan.
+    (game_root / "renpy" / "engine.rpyc").write_bytes(
+        (RPYC_FIXTURES / "current8_options.rpyc").read_bytes()
+    )
+    (game_root / "renpy" / "common" / "00action_file.rpyc").write_bytes(
+        (RPYC_FIXTURES / "current8_options.rpyc").read_bytes()
+    )
+    lib_dir = game_root / "lib" / "py3-linux-x86_64"
+    lib_dir.mkdir(parents=True)
+    (lib_dir / "bundled.rpyc").write_bytes((RPYC_FIXTURES / "current8_options.rpyc").read_bytes())
+    # The one legitimate game file that must be found.
+    (game_dir / "script.rpyc").write_bytes((RPYC_FIXTURES / "current8_options.rpyc").read_bytes())
+
+    proc = _run_unren("--json", "decompile", str(game_root))
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    data = json.loads(proc.stdout)
+    sources = [f["source"] for f in data["value"]["files"]]
+
+    assert len(sources) == 1
+    assert sources[0].endswith(str(Path("game") / "script.rpyc"))
+    assert not any("renpy" in s.split(os.sep) for s in sources)
+    assert not any("lib" in s.split(os.sep) for s in sources)
+
+
 def _build_patch_game(tmp_path: Path) -> Path:
     game_root = tmp_path / "PatchGame"
     game_dir = game_root / "game"
