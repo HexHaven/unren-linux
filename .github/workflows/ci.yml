@@ -60,6 +60,15 @@ jobs:
             "$PY" -m ensurepip --upgrade || true
             "$PY" -m pip install --break-system-packages pytest pytest-cov rich platformdirs
           fi
+          # Build the project's own .venv with the real `unren` console
+          # script installed. Some integration tests (see
+          # tests/integration/_launch.py) assert against the repo's real
+          # .venv/bin/unren by absolute path - a PATH-isolation regression
+          # guard for the M2 bug - so it must exist even though the suite
+          # itself still runs via PYTHONPATH=src below.
+          "$PY" -m venv .venv
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install -e ".[ui,paths]"
           PYTHONPATH="$PWD/src" "$PY" -m pytest tests/ -q
 
   pkgbuild:
@@ -82,6 +91,18 @@ jobs:
       - name: makepkg --printsrcinfo (syntax/metadata validation)
         working-directory: repo/packaging/arch
         run: makepkg --printsrcinfo | tee .SRCINFO
+
+      - name: Build repo .venv for PATH-isolation regression test
+        run: |
+          # check() (invoked by makepkg -s below) runs the same test suite
+          # as the pytest job, including the .venv/bin/unren regression
+          # guard (tests/integration/_launch.py) - it resolves the repo
+          # root from its own file location, i.e. repo/.venv, independent
+          # of check()'s PYTHONPATH. Build it up front so it exists before
+          # makepkg -s runs (and gets chowned to the builder user below).
+          python -m venv "$GITHUB_WORKSPACE/repo/.venv"
+          "$GITHUB_WORKSPACE/repo/.venv/bin/pip" install --upgrade pip
+          "$GITHUB_WORKSPACE/repo/.venv/bin/pip" install -e "$GITHUB_WORKSPACE/repo[ui,paths]"
 
       - name: makepkg -s (build + check, no install/no root)
         run: |
