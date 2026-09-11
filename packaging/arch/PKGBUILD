@@ -9,7 +9,7 @@
 # version bumps in pyproject.toml.
 
 pkgname=unren-forall-linux
-pkgver=0.1.0.r17.gee9004b
+pkgver=0.1.0.r22.gad253b1
 pkgrel=1
 pkgdesc="Native Linux port of UnRen-forall (Ren'Py game detection/utility toolkit)"
 arch=('any')
