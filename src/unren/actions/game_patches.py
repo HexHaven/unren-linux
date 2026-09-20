@@ -30,12 +30,17 @@ from unren.core.game_patch import PatchResult, apply_patch_file
 # --- Force-skip (seen-only) --------------------------------------------------
 # Upstream: allow_skipping=True, skip_unseen=True, skip_after_choices=True,
 # fast_skipping=True, Ctrl as skip keymap, persistent.game_completed=True.
+#
+# NOTE: `skip_unseen` / `skip_after_choices` are *preferences*, not config
+# variables, in current Ren'Py (see renpy/preferences.py; `config.skip_unseen`
+# was removed and raises "is not a known configuration variable" on 8.4+).
+# `preferences.*` is the long-standing, version-portable spelling.
 SKIP_FILENAME = "unren-skip.rpy"
 SKIP_CONTENT = """\
 init 999 python:
     config.allow_skipping = True
-    config.skip_unseen = True
-    config.skip_after_choices = True
+    preferences.skip_unseen = True
+    preferences.skip_after_choices = True
     config.fast_skipping = True
     config.keymap["skip"] = ["K_LCTRL", "K_RCTRL"]
     persistent.game_completed = True
@@ -47,8 +52,8 @@ SKIP_ALL_FILENAME = "unren-skipall.rpy"
 SKIP_ALL_CONTENT = """\
 init 999 python:
     config.allow_skipping = True
-    config.skip_unseen = True
-    config.skip_after_choices = True
+    preferences.skip_unseen = True
+    preferences.skip_after_choices = True
     config.fast_skipping = True
     persistent.game_completed = True
     _preferences.transitions = 0

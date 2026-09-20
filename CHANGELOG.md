@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `unren skip enable` / `unren skipall enable` wrote `config.skip_unseen` and
+  `config.skip_after_choices` (upstream's spelling), which no longer exist as
+  config variables in current Ren'Py. On Ren'Py 8.4/8.5 the patched game aborted
+  at startup with `Exception: config.skip_unseen is not a known configuration
+  variable.` Both are now written as `preferences.skip_unseen` /
+  `preferences.skip_after_choices` (the actual preference API, see Ren'Py's
+  `renpy/preferences.py`). Games already patched with the old content keep the
+  broken file; re-run the action after deleting `game/unren-skip.rpy` /
+  `game/unren-skipall.rpy` (and their stale `.rpyc`).
+
 ### Added
 
 - `packaging/arch/PKGBUILD`: `pkgver()` function derives a deterministic, unique
