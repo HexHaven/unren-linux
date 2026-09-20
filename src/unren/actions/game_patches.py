@@ -62,13 +62,20 @@ init 999 python:
 # --- Rollback enable ---------------------------------------------------------
 # Force-enables rollback (undo/scroll-back) with a large history buffer and
 # neutralizes renpy.block_rollback() (some games call it to block save-scumming).
+#
+# NOTE: the replacement must accept arguments. Ren'Py's real signature is
+# `block_rollback(purge=False)` (renpy/exports/rollbackexports.py) and the
+# engine itself calls `renpy.block_rollback(purge=True)` in
+# renpy/common/00start.rpy, so a bare `lambda: None` crashes the game at
+# startup with "TypeError: <lambda>() got an unexpected keyword argument
+# 'purge'".
 ROLLBACK_FILENAME = "unren-rollback.rpy"
 ROLLBACK_CONTENT = """\
 init 999 python:
     config.rollback_enabled = True
     config.hard_rollback_limit = 256
     config.rollback_length = 256
-    renpy.block_rollback = lambda: None
+    renpy.block_rollback = lambda *args, **kwargs: None
 """
 
 # --- Quick Save/Load enable ---------------------------------------------------

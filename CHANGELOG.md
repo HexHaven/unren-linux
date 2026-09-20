@@ -10,6 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `unren rollback enable` monkeypatched `renpy.block_rollback = lambda: None`,
+  a no-op that accepts no arguments. Ren'Py's own
+  `renpy/common/00start.rpy` calls `renpy.block_rollback(purge=True)` (real
+  signature: `block_rollback(purge=False)`), so patched games crashed at
+  startup with `TypeError: <lambda>() got an unexpected keyword argument
+  'purge'`. The replacement now takes `*args, **kwargs`. Games already patched
+  with the old content keep the broken file; delete
+  `game/unren-rollback.rpy` (and its stale `.rpyc`) and re-run.
 - `unren skip enable` / `unren skipall enable` wrote `config.skip_unseen` and
   `config.skip_after_choices` (upstream's spelling), which no longer exist as
   config variables in current Ren'Py. On Ren'Py 8.4/8.5 the patched game aborted
